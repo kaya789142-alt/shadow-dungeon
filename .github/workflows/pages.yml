@@ -37,3 +37,11 @@ jobs:
     steps:
       - id: deployment
         uses: actions/deploy-pages@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: 驗證正式網址的版本與資源
+        run: node scripts/verify-release.mjs "$PAGES_URL" "$GITHUB_SHA"
+        env:
+          PAGES_URL: ${{ steps.deployment.outputs.page_url }}

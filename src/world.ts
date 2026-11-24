@@ -1,5 +1,5 @@
 import Phaser from 'phaser'
-import { chest, drawWorld, entry, exit, HEIGHT, npcPoints, refuge, rng, secret, sprite, WIDTH } from './art'
+import { chest, drawWorld, entry, exit, HEIGHT, npcPoints, refuge, rng, secret, WIDTH } from './art'
 import type { Obstacle, Pose } from './art'
 import { allMonsters, elements, jobElements, jobs, morphs, pets, qualityColors, quests, rules, safeZone, vendors, zoneRoutes, zones } from './data'
 import type { Gear, Material } from './data'
@@ -10,7 +10,7 @@ import { clearPath, distance as dist, makeRoute } from './navigation'
 import type { Point } from './navigation'
 import { WorldText } from './world-text'
 import { DisplayResolution } from './display'
-import { creatureArt, heroArt, PortraitSprites, preloadPortraits, townArt } from './portrait-sprites'
+import { artKeys, creatureArt, heroArt, missingPortraits, PortraitSprites, preloadPortraits, townArt } from './portrait-sprites'
 
 type Monster={definition:typeof allMonsters[number]; x:number;y:number; home:Point; hp:number; max:number; hitAt:number; sleep:number; frozen:number; angry:boolean; hurt:number; tell?:{end:number;x:number;y:number; angle:number; phase:number}}
 type Loot={x:number;y:number; gold:number; material:Material; gear?:Gear}
@@ -18,7 +18,7 @@ type Strike='slash'|'arrow'|'spell'|'ring'
 const riftPoint={x:900,y:535}
 const elementColors=[0xff995f,0x99dfff,0xffd477,0xc785e7,0xffe0a4]
 type Burst={x:number;y:number;end:number;start:number;color:number;radius:number;source?:Point;style:Strike}
-export type WorldCallbacks={message:(text:string,style?:string)=>void; npc:(index:number)=>void; refresh:()=>void; death:()=>void; ready:()=>void}
+export type WorldCallbacks={message:(text:string,style?:string)=>void; npc:(index:number)=>void; refresh:()=>void; death:()=>void; failed:(reason:string)=>void; ready:()=>void}
 const angle=(a:Point,b:Point)=>Math.atan2(b.y-a.y,b.x-a.x)
 const inside=(x:number,y:number)=>x>24&&x<WIDTH-24&&y>28&&y<HEIGHT-24
 const colorNumber=(hex:string)=>parseInt(hex.slice(1),16)
@@ -28,6 +28,7 @@ export class World extends Phaser.Scene {
  activePlay=false
  blocked=false
  auto=false
+ assetCount=0
  joystick:Point={x:0,y:0}
  target?:Monster
  destination?:Point
@@ -50,6 +51,7 @@ export class World extends Phaser.Scene {
  private portraits!:PortraitSprites
  private heading=1
  private graphics!:Phaser.GameObjects.Graphics
+ private battleEffects!:Phaser.GameObjects.Graphics
  private worldText!:WorldText
  private mapCache=new Map<number,Obstacle[]>()
  private riftGuards:Monster[]=[]
@@ -73,7 +75,16 @@ export class World extends Phaser.Scene {
  constructor(hero:Hero,callbacks:WorldCallbacks){super('world');this.hero=hero;this.callbacks=callbacks}
  preload(){preloadPortraits(this)}
  create(){
+  const missing=missingPortraits(this)
+  if(missing.length){
+   this.callbacks.failed('角色或場景圖像：'+missing.join('、'))
+   this.scene.pause()
+   return
+  }
+  this.assetCount=artKeys.length+1
+  document.querySelector<HTMLElement>('#game')!.dataset.art=String(this.assetCount)
   this.graphics=this.add.graphics()
+  this.battleEffects=this.add.graphics().setDepth(3)
   this.portraits=new PortraitSprites(this)
   this.worldText=new WorldText(document.querySelector<HTMLElement>('#world-text')!)
   this.cameras.main.setBounds(0,0,WIDTH,HEIGHT).setRoundPixels(true)
@@ -112,11 +123,13 @@ export class World extends Phaser.Scene {
    :drawWorld(this,zone)
   this.mapCache.delete(zone)
   this.mapCache.set(zone,map.obstacles)
-  if(this.mapCache.size>2){
+  const mapLimit=navigator.maxTouchPoints>0?1:2
+  if(this.mapCache.size>mapLimit){
    const oldest=this.mapCache.keys().next().value!
    this.mapCache.delete(oldest);this.textures.remove('map-'+oldest)
   }
   this.background=map.world;this.obstacles=map.obstacles
+  document.querySelector<HTMLElement>('#game')!.dataset.maps=String(this.mapCache.size)
   const point=position??(safeZone(zone)?spawn:entry)
   Object.assign(this.hero,point)
   if(!this.passable(this.hero.x,this.hero.y))Object.assign(this.hero,safeZone(zone)?spawn:entry)
@@ -125,8 +138,8 @@ export class World extends Phaser.Scene {
   if(this.pet)Object.assign(this.pet,{x:this.hero.x-24,y:this.hero.y+18})
   this.worldText.reset()
   if(safeZone(zone)){
-   npcPoints.forEach((p,i)=>this.label(p.x,p.y-59-(i%2)*29,vendors[i],i===7?'#e9c780':'#cbc4c7'))
-   this.label(774,523,'燼燈泉 · 恢復','#a9ced1')
+   npcPoints.forEach((p,i)=>this.label(p.x,p.y-81-(i%2)*31,vendors[i],i===7?'#e9c780':'#cbc4c7'))
+   this.label(715,526,'燼燈泉 · 恢復','#a9ced1')
   }else{
    this.label(chest.x,chest.y-25,this.hero.chests.includes(zone)?'空寶箱':'失落寶箱','#e4bf7b')
    this.label(secret.x,secret.y-87,this.hero.hidden.includes(zone)?'隱密神龕':'刻印石門','#d6b2eb')
@@ -552,7 +565,7 @@ export class World extends Phaser.Scene {
   }else{this.moving=false;if(!this.activePlay)soundtrack('title')}
   const camera=this.cameras.main
   const cx=camera.scrollX+camera.width/2,cy=camera.scrollY+camera.height/2
-  camera.centerOn(Phaser.Math.Linear(cx,this.hero.x,Math.min(1,dt*9)),Phaser.Math.Linear(cy,this.hero.y-15,Math.min(1,dt*9)))
+  camera.centerOn(Phaser.Math.Linear(cx,this.hero.x,1-Math.exp(-dt*10)),Phaser.Math.Linear(cy,this.hero.y-15,1-Math.exp(-dt*10)))
   this.renderWorld()
  }
  navigateQuest(){
@@ -613,13 +626,22 @@ export class World extends Phaser.Scene {
  private ambient(){
   const g=this.graphics, zone=this.hero.zone, t=this.previewFrames
   if(safeZone(zone)){
-   for(let i=0;i<7;i++){
-    const x=742+i*10
-    g.lineStyle(1,0xb5ecdd,.20+.22*(.5+.5*Math.sin(t*3+i))).strokeEllipse(x,505+Math.sin(i*2+t*3)*4,12,3)
+   for(let i=0;i<6;i++){
+    const x=758+i*7, progress=(t*1.25+i*.17)%1
+    g.lineStyle(1.4,0xcaf5e6,.11+(1-progress)*.45).strokeEllipse(x,477+Math.sin(i*2+t*3)*3,6+progress*14,2+progress*4)
+    const drop=(i*.26+t*2)%1
+    g.fillStyle(0xd2f7ed,.45).fillCircle(774+Math.sin(i)*2+drop*6,444+drop*30,1+drop*.55)
    }
    for(const [x,y] of [[475,487],[638,480],[912,480],[1120,487],[631,606],[911,606]]){
     for(let j=3;j>0;j--)g.fillStyle(0xff9e52,.023+j*.006).fillEllipse(x,y-16,j*27+Math.sin(t*9+x)*5,j*21)
     g.fillStyle(0xffb36a,.7).fillTriangle(x-4,y-27,x+Math.sin(t*12+x)*3,y-39,x+4,y-27)
+   }
+  }
+  if(!safeZone(zone)&&zone>=3&&this.hero.preferences.detail!=='balanced'&&!this.display?.reduced){
+   for(let i=0;i<6;i++){
+    const x=235+i*202+Math.sin(t*.46+i)*62,y=410+i%3*113+Math.sin(t*.44+i)*16
+    g.fillStyle(zone===5?0xff976b:0xb2b9ce,.028).fillEllipse(x,y,171+i%3*25,24+i%2*6)
+    g.fillStyle(zone===5?0xfe6c53:0xbbc5e5,.029).fillEllipse(x+10,y-2,116,18)
    }
   }
   if(zone===10&&this.hero.preferences.detail!=='balanced'&&!this.display?.reduced){
@@ -635,7 +657,7 @@ export class World extends Phaser.Scene {
   }
  }
   private renderWorld(){
-  const g=this.graphics, hero=this.hero, zone=hero.zone, accent=zones[zone][4], frame=Math.floor(this.previewFrames*7)
+  const g=this.graphics, hero=this.hero, zone=hero.zone, accent=zones[zone][4]
   g.clear()
   for(const p of [entry,exit]){
    const pulse=(Math.sin(this.previewFrames*3.3)+1)/2
@@ -667,8 +689,8 @@ export class World extends Phaser.Scene {
    }
   }
   const focus=this.target?.hp?this.target:this.boss
-  this.worldText.target(focus&&{x:focus.x,y:focus.y-(focus.definition.boss?132:87)},focus?focus.definition.name+' · 等級 '+focus.definition.level:'')
-  this.worldText.update(this.cameras.main,this.previewFrames,this.display?.ratio??1)
+  this.worldText.target(focus&&{x:focus.x,y:focus.y-(focus.definition.boss?150:104)},focus?focus.definition.name+' · 等級 '+focus.definition.level:'')
+  this.worldText.update(this.cameras.main,this.previewFrames,this.display?.ratio??1,hero)
   this.ambient()
   this.portraits.begin()
   const visible=(p:Point)=>{
@@ -679,7 +701,7 @@ export class World extends Phaser.Scene {
   if(safeZone(zone))npcPoints.forEach((p,i)=>actors.push({y:p.y,render:()=>{
    if(!visible(p))return
    g.fillStyle(0x130f16,.38).fillEllipse(p.x,p.y+1,37,13)
-   if(!this.portraits.draw('npc'+i,townArt(i),p.x,p.y,i===4?68:61,'idle',this.previewFrames+i*.4,1))sprite(g,p.x,p.y,[0xc98276,0xa69b87,0xacb58a,0xb298d1,0xb9906e,0x9d9bae,0x7eb4ba,0xd7af7c,0xb085ab,0xad9bce][i],i%5,'idle',frame+i,1)
+   this.portraits.draw('npc'+i,townArt(i),p.x,p.y,i===4?83:74,'idle',this.previewFrames+i*.4,1)
    if(i===7)g.fillStyle(0xffc778).fillRect(p.x-1,p.y-66,3,7).fillRect(p.x-1,p.y-57,3,2)
   }}))
   for(const mob of this.mobs){
@@ -690,9 +712,9 @@ export class World extends Phaser.Scene {
     if(this.target===mob)g.lineStyle(2,0xf0a572,.9).strokeEllipse(mob.x,mob.y+2,d.boss?62:36,13)
     const pose:Pose=mob.hp<=0?'dead':mob.hurt>this.clock?'hurt':mob.tell?'cast':mob.hitAt-this.clock>.93&&mob.angry?'attack':mob.angry?'walk':'idle'
     const facing=this.direction(hero.x-mob.x,hero.y-mob.y)
-    const art=creatureArt(d.name,d.zone,d.boss), height=d.boss?106:art==='slime'?38:art==='spider'?48:61
+    const art=creatureArt(d.name,d.zone,d.boss), height=d.boss?122:art==='slime'?46:art==='spider'?61:74
     g.fillStyle(0x100d16,.48).fillEllipse(mob.x,mob.y+1,height*.61,height*.23)
-    if(!this.portraits.draw(mob,art,mob.x,mob.y,height,pose,this.previewFrames+d.id*.4,facing))sprite(g,mob.x,mob.y,d.color,5+d.id,pose,frame+d.id,mob.x>hero.x?-1:1,d.boss)
+    this.portraits.draw(mob,art,mob.x,mob.y,height,pose,this.previewFrames+d.id*.4,facing)
     if(mob.hp>0&&(this.target===mob||mob.angry)){
      const width=d.boss?78:39,y=mob.y-height-7
      g.fillStyle(0x211824).fillRect(mob.x-width/2,y,width,4)
@@ -704,7 +726,7 @@ export class World extends Phaser.Scene {
    const p=this.pet
    const key=['wolf','wraith','guard'][p.id]
    actors.push({y:p.y,render:()=>{
-    if(!this.portraits.draw('pet',key,p.x,p.y,41,'walk',this.previewFrames,1))sprite(g,p.x,p.y,pets[p.id][1],7+p.id,'walk',frame,1)
+    this.portraits.draw('pet',key,p.x,p.y,47,'walk',this.previewFrames,1)
    }})
   }
   actors.push({y:hero.y,render:()=>{
@@ -714,7 +736,7 @@ export class World extends Phaser.Scene {
    const pose:Pose=this.dead?'dead':this.poseUntil>this.clock?this.pose:this.moving?(this.running?'run':'walk'):'idle'
    const name=mix?['guard','guard','wolf','wraith','guard','dragon'][this.morph!.id]:heroArt(hero.job)
    g.fillStyle(0x120e16,.49).fillEllipse(hero.x,hero.y+1,43,13)
-   if(!this.portraits.draw('hero',name,hero.x,hero.y,68,pose,this.previewFrames,this.heading))sprite(g,hero.x,hero.y,mix?mix[1]:jobs[hero.job].color,mix?6+this.morph!.id:hero.job,pose,frame,this.facing,false,!!mix)
+   this.portraits.draw('hero',name,hero.x,hero.y,87,pose,this.previewFrames,this.heading)
    const weapon=hero.worn[0], armor=hero.worn[3]
    if(armor&&armor.grade>=3)g.lineStyle(2,colorNumber(qualityColors[armor.grade]),.6).strokeEllipse(hero.x,hero.y+2,46,16)
    if(weapon&&(weapon.plus>=4||weapon.element!==undefined)){
@@ -728,25 +750,29 @@ export class World extends Phaser.Scene {
   }})
   actors.sort((a,b)=>a.y-b.y).forEach(a=>a.render())
   this.portraits.end()
+  this.battleEffects.clear()
   this.bursts=this.bursts.filter(effect=>effect.end>this.clock)
   for(const effect of this.bursts){
    const t=(this.clock-effect.start)/(effect.end-effect.start), size=effect.radius*(.22+.78*t)
-   g.lineStyle(2,effect.color,(1-t)*.78).strokeEllipse(effect.x,effect.y-7,size*1.3,size*.78)
+   if(this.hero.preferences.detail!=='balanced'&&!this.display?.reduced){
+    for(let band=3;band>=1;band--)this.battleEffects.fillStyle(effect.color,(1-t)*.032).fillEllipse(effect.x,effect.y-13,size+band*13,size*.47+band*8)
+   }
+   this.battleEffects.lineStyle(2,effect.color,(1-t)*.78).strokeEllipse(effect.x,effect.y-7,size*1.3,size*.78)
    if(effect.style==='slash'){
     const facing=effect.source&&effect.x<effect.source.x?-1:1
-    g.lineStyle(4,effect.color,(1-t)*.78).beginPath().arc(effect.x-facing*11,effect.y-22,15+size*.56,facing<0?1.8:-1.35,facing<0?4.55:1.35).strokePath()
+    this.battleEffects.lineStyle(4,effect.color,(1-t)*.78).beginPath().arc(effect.x-facing*11,effect.y-22,15+size*.56,facing<0?1.8:-1.35,facing<0?4.55:1.35).strokePath()
    }
    if(effect.source&&t<.63&&effect.style!=='slash'){
     if(effect.style==='arrow'){
      const direction=angle(effect.source,effect), x=Phaser.Math.Linear(effect.source.x,effect.x,t/.63),y=Phaser.Math.Linear(effect.source.y,effect.y,t/.63)-20
-     g.lineStyle(2,0xffe5ad,.98).lineBetween(x-Math.cos(direction)*18,y-Math.sin(direction)*18,x,y)
+     this.battleEffects.lineStyle(2,0xffe5ad,.98).lineBetween(x-Math.cos(direction)*18,y-Math.sin(direction)*18,x,y)
      continue
     }
     const x=Phaser.Math.Linear(effect.source.x,effect.x,t/.63),y=Phaser.Math.Linear(effect.source.y,effect.y,t/.63)-15
-    g.lineStyle(2,effect.color,(1-t)*.8).lineBetween(effect.source.x,effect.source.y-15,x,y)
-    g.fillStyle(effect.color,.88).fillCircle(x,y,4)
+    this.battleEffects.lineStyle(2,effect.color,(1-t)*.8).lineBetween(effect.source.x,effect.source.y-15,x,y)
+    this.battleEffects.fillStyle(effect.color,.88).fillCircle(x,y,4)
    }
-   for(let i=0;i<7;i++)g.fillStyle(effect.color,1-t).fillRect(effect.x+Math.cos(i*.91)*size*.58,effect.y-12+Math.sin(i*.91)*size*.43,3,3)
+   for(let i=0;i<7;i++)this.battleEffects.fillStyle(effect.color,1-t).fillRect(effect.x+Math.cos(i*.91)*size*.58,effect.y-12+Math.sin(i*.91)*size*.43,3,3)
   }
  }
 }

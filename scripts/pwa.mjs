@@ -44,6 +44,12 @@ self.addEventListener('install',event=>{
 self.addEventListener('activate',event=>{
  event.waitUntil((async()=>{
   const prior=await older()
+  // V2.1 serves this cache entry ahead of the network on every navigation.
+  // Retire only its HTML after the replacement is complete, even if a browser
+  // gives one final navigation to the outgoing worker. Keep its hashed assets.
+  for(const key of prior){
+   if(/^[a-f0-9]{16}$/.test(key.slice(family.length)))await (await caches.open(key)).delete(shell)
+  }
   await Promise.all(prior.slice(0,-1).map(key=>caches.delete(key)))
   await self.clients.claim()
  })())
@@ -59,7 +65,7 @@ async function navigation(request){
  const abort=new AbortController()
  const timer=setTimeout(()=>abort.abort(),1800)
  try{
-  const remote=await fetch(request,{cache:'no-store',signal:abort.signal})
+  const remote=await fetch(request.url,{cache:'no-store',signal:abort.signal})
   // CDN propagation can temporarily mix versions. Keep the internally consistent installed shell.
   if(remote.ok&&(await remote.clone().text()).includes('content="'+release.id+'"'))return remote
  }catch{}finally{clearTimeout(timer)}

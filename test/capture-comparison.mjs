@@ -29,13 +29,14 @@ async function jobShot(page,job){
  await page.keyboard.down('w')
  await page.waitForTimeout(190)
  await page.keyboard.up('w')
+ await page.keyboard.press('ArrowDown',{delay:44})
  await page.waitForTimeout(380)
  await shot(page,`job-${job}`,{x:528,y:334,width:150,height:153})
 }
 try{
  for(let job=0;job<5;job++){
   const page=await enter(job)
-  if(job!==0){await jobShot(page,job);await page.close();continue}
+  if(job!==0||process.env.SHADOW_ONLY_JOBS==='1'){await jobShot(page,job);await page.close();continue}
   await shot(page,'village')
   await shot(page,'npc',{x:275,y:172,width:565,height:170})
   await button(page,'背包').click()

@@ -1,0 +1,74 @@
+export const slots = ['武器','盾牌','頭盔','盔甲','手套','靴子','披風','項鍊','戒指'] as const
+export const quality = ['普通','優良','稀有','史詩','傳說','神話']
+export const qualityColors = ['#ded1bc','#a7d68a','#83baff','#d6a1ff','#ffcb72','#ff7178']
+export const rules = { maxLevel:50, qualityWeights:[48,27,15,7,2.5,.5], drop:.78, book:.18, materialCuts:[.4,.58,.72,.85], safeWeapon:6, safeArmor:4, maxUpgrade:15, upgrade:[.84,.74,.65,.56,.49,.42,.36,.30,.25,.20,.16], destroy:.24, blessing:.12 }
+export type Effect = 'hit'|'area'|'heal'|'shield'|'freeze'|'dash'|'stealth'|'summon'
+export type Skill = { name:string; effect:Effect; power:number; mana:number; cooldown:number; range:number }
+const skill = (name:string,effect:Effect,power:number,mana:number,cooldown:number,range=120):Skill => ({name,effect,power,mana,cooldown,range})
+export const jobs = [
+ {name:'騎士', glyph:'⚔', title:'鐵壁守衛', description:'以鋼鐵與意志擋住暗影，擅長近身搏擊。', color:0xd0ab78, weapon:'闊劍', stats:[10,5,3,12,5], growth:[3,1,0,3,1], range:68, interval:.66, skills:[skill('重擊','hit',2,8,3,76),skill('旋風斬','area',1.7,13,6),skill('鐵壁','shield',.55,12,10),skill('盾擊','freeze',1.5,11,6,80),skill('破陣衝鋒','dash',2.8,19,10,215)]},
+ {name:'妖精', glyph:'➳', title:'林地遊俠', description:'以長弓與迅捷步伐追獵遠處的敵人。', color:0x8bbd87, weapon:'長弓', stats:[6,13,5,7,6], growth:[1,3,1,1,2], range:208, interval:.59, skills:[skill('多重箭','area',1.4,9,4,220),skill('穿透箭','hit',2.5,12,5,272),skill('寒木箭','freeze',1.4,11,6,235),skill('林隱','stealth',1,12,12),skill('召喚荊棘狼','summon',0,19,16)]},
+ {name:'法師', glyph:'✦', title:'秘法傳人', description:'操縱元素、凍結敵人並召喚秘法生物。', color:0xb49ae8, weapon:'法杖', stats:[3,6,15,6,11], growth:[0,1,4,1,3], range:177, interval:.77, skills:[skill('火球術','hit',2.1,8,3,238),skill('雷電術','area',1.8,14,5,220),skill('冰凍術','freeze',1.55,12,6,210),skill('秘法屏障','shield',.65,13,10),skill('召喚餘燼靈','summon',1,19,16)]},
+ {name:'暗影刺客', glyph:'†', title:'寂夜之刃', description:'以雙刃與暗影突襲打出連續暴擊。', color:0xe08493, weapon:'雙刃', stats:[9,15,4,7,4], growth:[2,4,1,1,1], range:64, interval:.43, skills:[skill('暗影突襲','dash',2.2,9,4,205),skill('隱身術','stealth',1,10,10),skill('裂刃','hit',2.8,13,6,72),skill('刃雨','area',1.75,15,6),skill('蝕毒','freeze',2,15,8,90)]},
+ {name:'聖騎士', glyph:'✚', title:'黎明誓衛', description:'以神聖護盾與治癒守護戰線。', color:0xf1ce75, weapon:'戰鎚', stats:[9,5,8,11,9], growth:[2,1,2,2,2], range:70, interval:.69, skills:[skill('神聖打擊','hit',2,8,3,83),skill('治癒術','heal',.35,13,7),skill('神聖護盾','shield',.7,15,10),skill('破曉','area',2,16,7,146),skill('召喚微光衛士','summon',2,20,16)]}
+]
+export const zones = [
+ ['燼燈村',1,0x31373b,0x252a31,0xf9bd70,'遠行的人啊，讓燼燈照亮你的歸路。'],
+ ['幽暗森林',1,0x25392f,0x1b2d2b,0x9cc58b,'樹根纏住礦道，林中傳來低鳴。'],
+ ['哥布林營地',5,0x44382c,0x312921,0xebaf67,'野火和木樁圍住破碎的王國遺址。'],
+ ['亡靈墓園',10,0x30394a,0x252733,0xb1c8eb,'每當暮鐘響起，墓碑底下便有動靜。'],
+ ['蜘蛛洞穴',16,0x42334b,0x2b2239,0xd4a5ec,'銀絲上結著凝固的古代魔力。'],
+ ['火焰峽谷',23,0x532f2c,0x351f28,0xff9361,'赤紅煙塵覆蓋著封印的第一道裂口。'],
+ ['暗影地下城',32,0x363252,0x241e38,0xbd9bf8,'王國留下的最後一塊封印在此沉睡。'],
+ ['黑暗魔王城堡',42,0x49283b,0x2e1c30,0xf88494,'黑暗王座正等待新的挑戰者。']
+] as const
+const creatures = [
+ ['苔芽史萊姆','灰脊狼人','尖刺毒蛾','苔冠貝希摩'],
+ ['碎牙哥布林','炭弓斥候','赤旗巨魔','裂旗領主'],
+ ['骷髏戰士','骷髏弓箭手','墓燈幽靈','亡鐘祭司'],
+ ['幼穴蛛','銀絲巨蛛','晶眼潛伏者','織夜蛛后'],
+ ['熔岩精靈','焦翼飛蜥','火焰惡魔','燼齒巨龍'],
+ ['幽影哨兵','黑暗騎士','亡靈法師','無面獄主'],
+ ['血棘劍士','暮翼幼龍','暗冠死靈','黑暗魔王']
+]
+const baselineMonsters = creatures.flatMap((names,region)=>names.map((name,index)=>({
+ id:region*4+index, zone:region+1,name,rank:['普通','普通','稀有','魔王'][index], boss:index===3, ranged:index===1||name.includes('法師'),
+ color:[0x8abb77,0xb68ac6,0xe5a477,0xe67c88][index], pattern:region%5, level:zones[region+1][1]+(index===3?3:index)
+})))
+const eliteNames=['荊棘樹魂','赤旗軍督','碎陵守衛','絲甲衛蛛','焦岩巨像','裂隙執刑者','王座禁衛']
+export const monsters = [...baselineMonsters,...eliteNames.map((name,i)=>({
+ id:28+i,zone:i+1,name,rank:'精英',boss:false,ranged:i===2||i===5,color:0xf8bc88,pattern:i%5,level:zones[i+1][1]+2
+}))]
+export type Gear = { uid:string; slot:number; grade:number; tier:number; plus:number; roll:number; job?:number; identified:boolean }
+const setNames = ['旅人','苔紋','夜銀','星燼','王印','無光']
+export const gearName = (gear:Gear) => setNames[gear.grade]+'・'+(gear.slot===0 ? jobs[gear.job??0].weapon : slots[gear.slot])+(gear.plus?' +'+gear.plus:'')
+export const materialNames = { red:'生命藥水',blue:'魔力藥水',weapon:'武器強化卷軸',armor:'防具強化卷軸',bless:'祝福強化卷軸',protect:'裝備保護卷軸',warp:'傳送卷軸',home:'回城卷軸',morph:'變身卷軸',identify:'鑑定卷軸',book:'技能書',shard:'影晶碎片' } as const
+export type Material = keyof typeof materialNames
+export const morphs = [
+ ['骷髏戰士',0xcac5ae,1.15,1],['暗影騎士',0xa88cdb,1,1.2],['狼族戰士',0xb59372,1.2,1.12],
+ ['魔法使',0x92c9e5,1.1,1.16],['亡靈守衛',0x9fc894,1.05,1.13],['龍族戰士',0xeb837c,1.18,1.18]
+] as const
+export const pets = [['荊棘狼',0x98c475,'提升移動速度'],['餘燼靈',0xf9a977,'提升攻擊傷害'],['微光衛士',0xaedbe8,'降低所受傷害']] as const
+export const vendors = ['武器商人','防具商人','藥水商人','魔法卷軸商人','裝備強化師','倉庫管理員','傳送師','任務管理員','神秘商人','技能導師']
+export type Quest = { id:string; name:string; event:string; count:number; zone?:number; target?:number; daily?:boolean }
+export const quests:Quest[] = [
+ {id:'move',name:'踏出第一步',event:'move',count:1},
+ {id:'potion',name:'旅人的準備',event:'potion',count:1},
+ {id:'gear',name:'披甲上路',event:'equip',count:1},
+ {id:'forge',name:'鍛爐初火',event:'forge',count:1},
+ {id:'learn',name:'導師的試煉',event:'learn',count:1},
+ {id:'gather',name:'封印的碎片',event:'shard',count:5},
+ {id:'daily',name:'每日委託・清除魔物',event:'kill',count:8,daily:true},
+ ...zones.slice(1).flatMap(([name], index)=>[
+   {id:'hunt'+index,name:name+'・狩獵令',event:'kill',count:6,zone:index+1,target:index*4},
+   {id:'chest'+index,name:name+'・失落的寶箱',event:'chest',count:1,zone:index+1},
+   {id:'hidden'+index,name:name+'・秘徑',event:'hidden',count:1,zone:index+1},
+   {id:'boss'+index,name:'封印紀事・'+monsters[index*4+3].name,event:'boss',count:1,zone:index+1}
+ ])
+]
+export const achievements = [
+ {id:'first',name:'破曉旅人',description:'擊敗第一隻魔物',event:'kill',count:1},
+ {id:'forge',name:'淬火之手',description:'強化成功五次',event:'forge',count:5},
+ {id:'hidden',name:'秘徑行者',description:'發現三處隱藏區域',event:'hidden',count:3},
+ {id:'boss',name:'封印守望者',description:'擊敗七種區域魔王',event:'bossUnique',count:7}
+]

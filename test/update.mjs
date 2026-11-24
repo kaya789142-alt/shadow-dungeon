@@ -57,7 +57,9 @@ try{
  // An already running V2.1 page does not have the V2.2 update listener.
  await page.close()
  page=await context.newPage()
- await page.goto(base)
+ const reopened=await page.goto(base)
+ const reopenedHtml=await reopened.text()
+ if(!reopenedHtml.includes(current.id))await page.goto(base+'?refresh='+encodeURIComponent(current.id))
  await button('繼續冒險').click()
  assert.equal(await meta(),current.id)
  assert.equal((await read()).bag[0].uid,oldSave.bag[0].uid)

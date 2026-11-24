@@ -1,10 +1,11 @@
 import { achievements, jobs, materialNames, quests, rules, zones } from './data.ts'
+import type { Detail } from './display.ts'
 import type { Gear, Material } from './data.ts'
 
 export const spawn = {x:805,y:552}
 export const materials = Object.keys(materialNames) as Material[]
 export const day = () => new Intl.DateTimeFormat('sv-SE').format(new Date())
-export const defaultPreferences={size:1,detail:'high' as 'high'|'balanced',click:'move' as 'move'|'interact',shake:true,ambience:.35}
+export const defaultPreferences={size:1,detail:'high' as Detail,click:'move' as 'move'|'interact',shake:true,ambience:.35}
 export type Hero = ReturnType<typeof createHero>
 export function createHero(name:string, job:number) {
  return {
@@ -134,7 +135,7 @@ export function decodeSave(json:string):Hero {
  const prefs=object(value.preferences)?value.preferences:{}
  hero.preferences={
   size:finite(prefs.size,1,1.4)?prefs.size:defaultPreferences.size,
-  detail:prefs.detail==='balanced'?'balanced':'high',
+  detail:prefs.detail==='balanced'||prefs.detail==='ultra'?prefs.detail:'high',
   click:prefs.click==='interact'?'interact':'move',
   ambience:finite(prefs.ambience,0,1)?prefs.ambience:defaultPreferences.ambience,
   shake:typeof prefs.shake==='boolean'?prefs.shake:defaultPreferences.shake

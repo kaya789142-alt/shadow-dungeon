@@ -1,6 +1,7 @@
 import Phaser from 'phaser'
 import { safeZone, zones } from './data'
 
+import { cobble, roofMaterial } from './terrain-material'
 import { drawAdventurer } from './actor-art'
 
 export const WIDTH=1500, HEIGHT=1024, TILE=32
@@ -109,6 +110,9 @@ function gate(g:Phaser.GameObjects.Graphics,x:number,y:number,c:number){
 }
 export function drawWorld(scene:Phaser.Scene,zone:number){
  const g=scene.add.graphics(), r=rng(540+zone*127), [, ,ground,dark,accent]=zones[zone], obstacles:Obstacle[]=[]
+ const propsArt:{name:string;x:number;y:number;height:number;width?:number;mirror?:boolean}[]=[]
+ const cottages=['cottage-blue','cottage-green','cottage-red','cottage-blue','cottage-red']
+ const has=(name:string)=>scene.textures.exists(name)
  const settlement=safeZone(zone)
  const organic=settlement||zone===1||zone===2||zone===10
  const path=(x:number,y:number)=>Math.abs(y-535-Math.sin(x/165)*12)<(settlement?52:32)
@@ -145,17 +149,28 @@ export function drawWorld(scene:Phaser.Scene,zone:number){
   props.push({x,y,s:.55+r()*.64})
  }
  for(const {x,y,s} of props.sort((a,b)=>a.y-b.y)){
-  if(organic&&r()>.18)pine(g,x,y,s,color(settlement?0x344744:0x344e44,ground,r()*.5),r)
+  if(organic&&r()>.18){
+   const shade=color(settlement?0x344744:0x344e44,ground,r()*.5)
+   if(has('spruce')){
+    propsArt.push({name:'spruce',x,y,height:94*s,width:75*s,mirror:x%2>1})
+    for(let i=0;i<40;i++)r()
+   }else pine(g,x,y,s,shade,r)
+  }
   else if(zone===3){
    oval(g,0x171a24,x,y+1,38*s,13*s,.5)
    ink(g,0x38394a,x-10*s,y-26*s,20*s,30*s);ink(g,0x626276,x-8*s,y-29*s,15*s,25*s)
    ink(g,0x353244,x-4*s,y-19*s,7*s,2*s);ink(g,0x353244,x-1*s,y-22*s,2*s,10*s)
-  }else stone(g,x,y,s,color(ground,accent,.22))
+  }else if(has('boulder'))propsArt.push({name:'boulder',x,y,height:36*s,width:45*s,mirror:x%2>1})
+  else stone(g,x,y,s,color(ground,accent,.22))
   obstacles.push({x,y:y-5,r:12*s})
  }
  if(settlement){
-  for(const [x,y,c] of [[568,424,0x514653],[752,401,0x53465d],[944,420,0x61434b],[1054,648,0x574254],[519,650,0x55424d]]){
-   house(g,x,y,c,r);obstacles.push({x,y:y-24,r:37})
+  const houses=[[568,424,0x514653],[752,401,0x53465d],[944,420,0x61434b],[1054,648,0x574254],[519,650,0x55424d]]
+  for(const [index,[x,y,c]] of houses.entries()){
+   const name=cottages[index]
+   if(has(name))propsArt.push({name,x,y,height:144,width:155,mirror:index===2||index===4})
+   else house(g,x,y,c,r)
+   obstacles.push({x,y:y-24,r:37})
   }
   fountain(g,774,510);obstacles.push({x:774,y:501,r:35})
   for(const [x,y] of [[475,487],[1120,487],[508,583],[1063,560],[638,480],[912,480],[631,606],[911,606]])torch(g,x,y)
@@ -211,11 +226,53 @@ export function drawWorld(scene:Phaser.Scene,zone:number){
   oval(g,accent,refuge.x,refuge.y,102,61,.12)
   g.lineStyle(1,accent,.56).strokeEllipse(refuge.x,refuge.y,86,53)
   gate(g,secret.x,secret.y,accent)
+  if(has('arch'))propsArt.push({name:'arch',...secret,height:97,width:85})
  }
  gate(g,entry.x,entry.y,0x76b1c2);gate(g,exit.x,exit.y,accent)
- if(!scene.textures.exists('map-'+zone))g.generateTexture('map-'+zone,WIDTH,HEIGHT)
+ if(has('arch'))for(const point of [entry,exit])propsArt.push({name:'arch',...point,height:97,width:85})
+ const key='map-'+zone
+ const texture=scene.textures.createCanvas(key,WIDTH*2,HEIGHT*2)!
+ g.setScale(2).generateTexture(key,WIDTH*2,HEIGHT*2)
  g.destroy()
- const world=scene.add.image(0,0,'map-'+zone).setOrigin(0).setDepth(-2)
+ const c=texture.getContext(), detail=rng(1996+zone*61)
+ c.save();c.scale(2,2)
+ // Overlay brush detail on the baked geometry; simulation, obstacles and portals remain in logical coordinates.
+ for(let i=0;i<10_000;i++){
+  const x=detail()*WIDTH,y=detail()*HEIGHT
+  if(!path(x,y)&&!plaza(x,y)){
+   c.fillStyle=detail()>.56?'#bfc5a51d':'#0e191724'
+   c.fillRect(x,y,1+detail()*2,.6+detail()*1.4)
+  }
+ }
+ c.globalAlpha=.58
+ for(let y=473;y<599;y+=9)for(let x=-10+(Math.floor(y/9)%2)*12;x<WIDTH;x+=24){
+  if(!path(x+12,y+4)||settlement&&x>480&&x<1120||x<177||x>1337)continue
+  cobble(c,x+detail()*2-1,y+detail()*1.7-1,21+detail()*3,8,.72,detail)
+ }
+ if(settlement){
+  for(let y=458;y<599;y+=8)for(let x=475+(Math.floor(y/8)%2)*11;x<1120;x+=23){
+   if(Math.hypot(x-774,y-501)<56||[[475,487],[638,480],[912,480],[1120,487],[508,583],[1063,560]].some(([tx,ty])=>Math.hypot(x-tx,y-ty)<17))continue
+   cobble(c,x+detail()*2-1,y+detail()*1.4-1,21+detail()*2,7.5,.76,detail)
+  }
+  if(!has(cottages[0]))for(const [x,y] of [[568,424],[752,401],[944,420],[1054,648],[519,650]])roofMaterial(c,x,y,detail)
+ }
+ c.globalAlpha=1
+ c.imageSmoothingEnabled=true;c.imageSmoothingQuality='high'
+ for(const prop of propsArt.sort((a,b)=>a.y-b.y)){
+  const source=scene.textures.get(prop.name).getSourceImage()
+  if(!(source instanceof HTMLImageElement))continue
+  const width=prop.width??prop.height*source.width/source.height
+  c.save();c.translate(prop.x,prop.y)
+  const shadow=c.createRadialGradient(3,2,0,3,2,width*.42)
+  shadow.addColorStop(0,'#080b0e80');shadow.addColorStop(1,'#080b0e00')
+  c.save();c.scale(1,.31);c.fillStyle=shadow;c.fillRect(-width*.6,-width*.44,width*1.2,width);c.restore()
+  if(prop.mirror)c.scale(-1,1)
+  c.drawImage(source,-width*.5,-prop.height,width,prop.height)
+  c.restore()
+ }
+ c.restore()
+ texture.refresh()
+ const world=scene.add.image(0,0,key).setOrigin(0).setDisplaySize(WIDTH,HEIGHT).setDepth(-2)
  return {world,obstacles}
 }
 export type Pose='idle'|'walk'|'run'|'attack'|'cast'|'hurt'|'dead'

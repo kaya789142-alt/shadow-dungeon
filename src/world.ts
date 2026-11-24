@@ -5,10 +5,12 @@ import { allMonsters, elements, jobElements, jobs, morphs, pets, qualityColors, 
 import type { Gear, Material } from './data'
 import { attributes, giveXp, makeGear, makeRelic, qualityRoll, record, rollover, spawn } from './model'
 import type { Hero } from './model'
-import { sound, soundtrack } from './sound'
+import { sound, soundtrack, victory } from './sound'
 import { clearPath, distance as dist, makeRoute } from './navigation'
 import type { Point } from './navigation'
 import { WorldText } from './world-text'
+import { DisplayResolution } from './display'
+import { creatureArt, heroArt, PortraitSprites, preloadPortraits, townArt } from './portrait-sprites'
 
 type Monster={definition:typeof allMonsters[number]; x:number;y:number; home:Point; hp:number; max:number; hitAt:number; sleep:number; frozen:number; angry:boolean; hurt:number; tell?:{end:number;x:number;y:number; angle:number; phase:number}}
 type Loot={x:number;y:number; gold:number; material:Material; gear?:Gear}
@@ -42,7 +44,11 @@ export class World extends Phaser.Scene {
  dead=false
  clock=0
  private lastTick=0
+ private lastCombat=-10
  private background?:Phaser.GameObjects.Image
+ private display?:DisplayResolution
+ private portraits!:PortraitSprites
+ private heading=1
  private graphics!:Phaser.GameObjects.Graphics
  private worldText!:WorldText
  private mapCache=new Map<number,Obstacle[]>()
@@ -65,11 +71,14 @@ export class World extends Phaser.Scene {
  private routeAt=-10
 
  constructor(hero:Hero,callbacks:WorldCallbacks){super('world');this.hero=hero;this.callbacks=callbacks}
+ preload(){preloadPortraits(this)}
  create(){
   this.graphics=this.add.graphics()
+  this.portraits=new PortraitSprites(this)
   this.worldText=new WorldText(document.querySelector<HTMLElement>('#world-text')!)
   this.cameras.main.setBounds(0,0,WIDTH,HEIGHT).setRoundPixels(true)
-  this.scale.on('resize',()=>this.resize())
+  this.display=new DisplayResolution(this,document.querySelector<HTMLElement>('#game')!,()=>this.hero.preferences.detail,()=>this.resize())
+  this.resize()
   this.keys=this.input.keyboard?.addKeys('W,A,S,D,UP,DOWN,LEFT,RIGHT,SHIFT') as typeof this.keys
   this.input.keyboard?.addCapture(['SPACE','UP','DOWN','LEFT','RIGHT'])
   this.input.on('pointerdown',(pointer:Phaser.Input.Pointer)=>{
@@ -85,16 +94,21 @@ export class World extends Phaser.Scene {
   this.callbacks.ready()
  }
  resize(){
-  this.cameras.main.setZoom(Math.max(.74,Math.min(1.32,this.scale.width/1060,this.scale.height/440)))
+  const ratio=this.display?.ratio??1
+  this.cameras.main.setSize(this.scale.width,this.scale.height)
+  this.cameras.main.setZoom(ratio*Math.max(.74,Math.min(1.32,this.scale.width/ratio/1060,this.scale.height/ratio/440)))
   this.cameras.main.centerOn(this.hero.x,this.hero.y)
 
  }
+ applyDetail(){this.display?.select()}
  enter(zone:number,position?:Point,silent=false){
   this.hero.zone=zone
+  this.portraits.reset()
+  this.lastCombat=-10
   this.background?.destroy()
   const cached=this.mapCache.get(zone)
   const map=cached
-   ?{world:this.add.image(0,0,'map-'+zone).setOrigin(0).setDepth(-2),obstacles:cached}
+   ?{world:this.add.image(0,0,'map-'+zone).setOrigin(0).setDisplaySize(WIDTH,HEIGHT).setDepth(-2),obstacles:cached}
    :drawWorld(this,zone)
   this.mapCache.delete(zone)
   this.mapCache.set(zone,map.obstacles)
@@ -159,6 +173,7 @@ export class World extends Phaser.Scene {
   if(this.passable(entity.x,entity.y+dy))entity.y+=dy
   return dist(entity,{x,y})>.01
  }
+ private direction(x:number,y:number){return (Math.round(Math.atan2(y,x)/(Math.PI/4))+8)%8}
  private go(goal:Point,speed:number,dt:number,reach=10){
   const passable=(x:number,y:number)=>this.passable(x,y)
   if(!this.routeGoal||dist(this.routeGoal,goal)>34||this.clock>=this.routeAt){
@@ -170,6 +185,7 @@ export class World extends Phaser.Scene {
   const point=this.route[0]??goal
   const a=angle(this.hero,point), stride=Math.min(speed*dt,dist(this.hero,point))
   if(stride<1)return false
+  this.heading=this.direction(Math.cos(a),Math.sin(a))
   this.facing=Math.cos(a)<-.12?-1:Math.cos(a)>.12?1:this.facing
   if(this.walk(this.hero,Math.cos(a)*stride,Math.sin(a)*stride))return true
   for(const offset of [1.05,1.52,-1.05,-1.52]){
@@ -242,7 +258,7 @@ export class World extends Phaser.Scene {
  private basic(mob:Monster){
   const stats=attributes(this.hero), job=jobs[this.hero.job]
   if(dist(this.hero,mob)>job.range||!this.line(this.hero,mob)||this.clock-this.lastAttack<stats.interval/(this.morph?morphs[this.morph.id][3]:1))return
-  this.lastAttack=this.clock;this.facing=mob.x<this.hero.x?-1:1;this.setPose('attack')
+  this.lastAttack=this.clock;this.facing=mob.x<this.hero.x?-1:1;this.heading=this.direction(mob.x-this.hero.x,mob.y-this.hero.y);this.setPose('attack')
   const style=this.hero.job===1?'arrow':this.hero.job===2?'spell':'slash'
   this.burst(mob,job.color,50,this.hero,style)
   sound(style==='arrow'?'arrow':style==='spell'?'magic':'hit')
@@ -284,6 +300,7 @@ export class World extends Phaser.Scene {
  }
  private hit(mob:Monster,power:number,magic:boolean,spellElement?:number){
   if(mob.hp<=0)return
+  this.lastCombat=this.clock
   const hero=this.hero, stats=attributes(hero), weapon=hero.worn[0]
   this.hiddenUntil=0;mob.angry=true
   const enemyEvasion=mob.definition.rank==='稀有'?.055:mob.definition.rank==='世界魔王'?.075:.015
@@ -316,6 +333,7 @@ export class World extends Phaser.Scene {
   if(this.riftGuards.includes(mob)&&this.riftGuards.every(guard=>guard.hp<=0))this.resolveRift()
   if(def.boss){
    record(hero,'boss',1,def.id)
+   victory()
    if(first)record(hero,'bossUnique')
    this.callbacks.message(def.id===27?'黑暗魔王已敗退，古老封印重獲安寧。':'已擊敗 '+def.name,'gold')
   }
@@ -334,7 +352,7 @@ export class World extends Phaser.Scene {
  }
  reward(xp:number){
   const count=giveXp(this.hero,xp)
-  if(count){sound('level');this.burst(this.hero,0xffcb71,95);this.callbacks.message('提升至等級 '+this.hero.level,'gold')}
+  if(count){victory();this.burst(this.hero,0xffcb71,95);this.callbacks.message('提升至等級 '+this.hero.level,'gold')}
  }
  pickup(){
   if(!this.activePlay||this.blocked||this.dead)return
@@ -398,6 +416,7 @@ export class World extends Phaser.Scene {
  private setPose(pose:Pose){this.pose=pose;this.poseUntil=this.clock+.29}
  private hurt(mob:Monster,multiplier=1){
   if(this.dead||this.hiddenUntil>this.clock)return
+  this.lastCombat=this.clock
   const stats=attributes(this.hero)
   if(Math.random()<stats.evade){this.float(this.hero,'閃避','#c7dade');return}
   const level=mob.definition.level
@@ -478,6 +497,7 @@ export class World extends Phaser.Scene {
  update(_time:number,delta:number){
   const dt=Math.min(delta/1000,.05)
   this.previewFrames+=dt
+  this.display?.sample(delta,this.activePlay&&!this.blocked)
   if(this.activePlay&&!this.blocked&&!this.dead){
    this.clock+=dt
    const hero=this.hero, stats=attributes(hero)
@@ -494,6 +514,7 @@ export class World extends Phaser.Scene {
     this.running=!!k?.SHIFT.isDown||Math.hypot(this.joystick.x,this.joystick.y)>.9
     const stride=speed*(this.running?1.21:1)
     this.moving=this.walk(hero,dx/norm*stride*dt,dy/norm*stride*dt)
+    this.heading=this.direction(dx,dy)
     if(dx)this.facing=dx>0?1:-1
    }else if(!this.interactNear()){
     if(this.auto&&!this.target&&!this.destination){
@@ -525,8 +546,10 @@ export class World extends Phaser.Scene {
     hero.mp=Math.min(stats.mp,hero.mp+(safeZone(hero.zone)?4:.65))
     this.explore()
    }
-   soundtrack(this.boss?'boss':safeZone(hero.zone)?'village':hero.zone===1||hero.zone===10?'forest':'dungeon')
-  }else this.moving=false
+   if(this.target?.hp)this.lastCombat=this.clock
+   soundtrack(this.boss?'boss':this.clock-this.lastCombat<3?'battle':safeZone(hero.zone)?'village':
+    hero.zone===1||hero.zone===10?'forest':hero.zone===3?'graveyard':'dungeon')
+  }else{this.moving=false;if(!this.activePlay)soundtrack('title')}
   const camera=this.cameras.main
   const cx=camera.scrollX+camera.width/2,cy=camera.scrollY+camera.height/2
   camera.centerOn(Phaser.Math.Linear(cx,this.hero.x,Math.min(1,dt*9)),Phaser.Math.Linear(cy,this.hero.y-15,Math.min(1,dt*9)))
@@ -599,7 +622,7 @@ export class World extends Phaser.Scene {
     g.fillStyle(0xffb36a,.7).fillTriangle(x-4,y-27,x+Math.sin(t*12+x)*3,y-39,x+4,y-27)
    }
   }
-  if(zone===10&&this.hero.preferences.detail==='high'){
+  if(zone===10&&this.hero.preferences.detail!=='balanced'&&!this.display?.reduced){
    for(let i=0;i<16;i++){
     const x=200+i*66+(t*7)%38, y=239+Math.sin(x/149)*17
     g.lineStyle(1,0x9fddd4,.27+.18*Math.sin(t*2+i)).lineBetween(x,y-4+(i%5)*4,x+17,y-4+(i%5)*4)
@@ -619,7 +642,7 @@ export class World extends Phaser.Scene {
    g.lineStyle(1,accent,.25+pulse*.35).strokeEllipse(p.x,p.y,48+pulse*22,13+pulse*8)
    g.fillStyle(accent,.3+pulse*.4).fillRect(p.x-1,p.y-35+Math.sin(this.previewFrames*2)*13,2,4)
   }
-  for(let i=0;i<(hero.preferences.detail==='high'?41:13);i++){
+  for(let i=0;i<(this.display?.reduced?13:hero.preferences.detail==='ultra'?65:hero.preferences.detail==='high'?39:13);i++){
    const x=(i*131+Math.sin(this.previewFrames*.3+i)*58+WIDTH)%WIDTH
    const y=(i*79-this.previewFrames*(6+i%7)+HEIGHT*100)%HEIGHT
    g.fillStyle(zone===0?0xffa762:accent,.14+.32*(.5+.5*Math.sin(this.previewFrames+i))).fillRect(Math.round(x),Math.round(y),i%5===0?3:2,2)
@@ -644,38 +667,67 @@ export class World extends Phaser.Scene {
    }
   }
   const focus=this.target?.hp?this.target:this.boss
-  this.worldText.target(focus&&{x:focus.x,y:focus.y-(focus.definition.boss?86:63)},focus?focus.definition.name+' · 等級 '+focus.definition.level:'')
-  this.worldText.update(this.cameras.main,this.previewFrames)
+  this.worldText.target(focus&&{x:focus.x,y:focus.y-(focus.definition.boss?132:87)},focus?focus.definition.name+' · 等級 '+focus.definition.level:'')
+  this.worldText.update(this.cameras.main,this.previewFrames,this.display?.ratio??1)
   this.ambient()
+  this.portraits.begin()
+  const visible=(p:Point)=>{
+   const camera=this.cameras.main, dx=p.x-(camera.scrollX+camera.width/2),dy=p.y-(camera.scrollY+camera.height/2)
+   return Math.abs(dx)<camera.width/camera.zoom/2+130&&Math.abs(dy)<camera.height/camera.zoom/2+130
+  }
   const actors:{y:number;render:()=>void}[]=[]
   if(safeZone(zone))npcPoints.forEach((p,i)=>actors.push({y:p.y,render:()=>{
-   sprite(g,p.x,p.y,[0xc98276,0xa69b87,0xacb58a,0xb298d1,0xb9906e,0x9d9bae,0x7eb4ba,0xd7af7c,0xb085ab,0xad9bce][i],i%5,'idle',frame+i,1)
+   if(!visible(p))return
+   g.fillStyle(0x130f16,.38).fillEllipse(p.x,p.y+1,37,13)
+   if(!this.portraits.draw('npc'+i,townArt(i),p.x,p.y,i===4?68:61,'idle',this.previewFrames+i*.4,1))sprite(g,p.x,p.y,[0xc98276,0xa69b87,0xacb58a,0xb298d1,0xb9906e,0x9d9bae,0x7eb4ba,0xd7af7c,0xb085ab,0xad9bce][i],i%5,'idle',frame+i,1)
    if(i===7)g.fillStyle(0xffc778).fillRect(p.x-1,p.y-66,3,7).fillRect(p.x-1,p.y-57,3,2)
   }}))
   for(const mob of this.mobs){
-   if(mob.hp<=0&&this.clock>mob.hurt+1.05)continue
+   if(!visible(mob)||mob.hp<=0&&this.clock>mob.hurt+1.05)continue
    actors.push({y:mob.y,render:()=>{
     const d=mob.definition
     if(d.rank==='精英'&&mob.hp>0)g.lineStyle(1,0xe6af77,.8).strokeEllipse(mob.x,mob.y,39,15)
     if(this.target===mob)g.lineStyle(2,0xf0a572,.9).strokeEllipse(mob.x,mob.y+2,d.boss?62:36,13)
-    sprite(g,mob.x,mob.y,d.color,5+d.id,mob.hp<=0?'dead':mob.hurt>this.clock?'hurt':mob.tell?'cast':mob.hitAt-this.clock>.93&&mob.angry?'attack':mob.angry?'walk':'idle',frame+d.id,mob.x>hero.x?-1:1,d.boss)
+    const pose:Pose=mob.hp<=0?'dead':mob.hurt>this.clock?'hurt':mob.tell?'cast':mob.hitAt-this.clock>.93&&mob.angry?'attack':mob.angry?'walk':'idle'
+    const facing=this.direction(hero.x-mob.x,hero.y-mob.y)
+    const art=creatureArt(d.name,d.zone,d.boss), height=d.boss?106:art==='slime'?38:art==='spider'?48:61
+    g.fillStyle(0x100d16,.48).fillEllipse(mob.x,mob.y+1,height*.61,height*.23)
+    if(!this.portraits.draw(mob,art,mob.x,mob.y,height,pose,this.previewFrames+d.id*.4,facing))sprite(g,mob.x,mob.y,d.color,5+d.id,pose,frame+d.id,mob.x>hero.x?-1:1,d.boss)
     if(mob.hp>0&&(this.target===mob||mob.angry)){
-     const width=d.boss?60:32,y=mob.y-(d.boss?61:37)
+     const width=d.boss?78:39,y=mob.y-height-7
      g.fillStyle(0x211824).fillRect(mob.x-width/2,y,width,4)
      g.fillStyle(d.color).fillRect(mob.x-width/2+1,y+1,(width-2)*mob.hp/mob.max,2)
     }
    }})
   }
-  if(this.pet){const p=this.pet;actors.push({y:p.y,render:()=>sprite(g,p.x,p.y,pets[p.id][1],7+p.id,'walk',frame,1)})}
+  if(this.pet){
+   const p=this.pet
+   const key=['wolf','wraith','guard'][p.id]
+   actors.push({y:p.y,render:()=>{
+    if(!this.portraits.draw('pet',key,p.x,p.y,41,'walk',this.previewFrames,1))sprite(g,p.x,p.y,pets[p.id][1],7+p.id,'walk',frame,1)
+   }})
+  }
   actors.push({y:hero.y,render:()=>{
    g.lineStyle(1,0xe6bd85,.76).strokeEllipse(hero.x,hero.y+2,42,14)
    g.fillStyle(0xe7ad6d,.15).fillEllipse(hero.x,hero.y+2,41,13)
    const mix=this.morph?morphs[this.morph.id]:undefined
-   sprite(g,hero.x,hero.y,mix?mix[1]:jobs[hero.job].color,mix?6+this.morph!.id:hero.job,this.dead?'dead':this.poseUntil>this.clock?this.pose:this.moving?(this.running?'run':'walk'):'idle',frame,this.facing,false,!!mix)
+   const pose:Pose=this.dead?'dead':this.poseUntil>this.clock?this.pose:this.moving?(this.running?'run':'walk'):'idle'
+   const name=mix?['guard','guard','wolf','wraith','guard','dragon'][this.morph!.id]:heroArt(hero.job)
+   g.fillStyle(0x120e16,.49).fillEllipse(hero.x,hero.y+1,43,13)
+   if(!this.portraits.draw('hero',name,hero.x,hero.y,68,pose,this.previewFrames,this.heading))sprite(g,hero.x,hero.y,mix?mix[1]:jobs[hero.job].color,mix?6+this.morph!.id:hero.job,pose,frame,this.facing,false,!!mix)
+   const weapon=hero.worn[0], armor=hero.worn[3]
+   if(armor&&armor.grade>=3)g.lineStyle(2,colorNumber(qualityColors[armor.grade]),.6).strokeEllipse(hero.x,hero.y+2,46,16)
+   if(weapon&&(weapon.plus>=4||weapon.element!==undefined)){
+    const c=weapon.element!==undefined&&weapon.identified?elementColors[weapon.element]:colorNumber(qualityColors[weapon.grade])
+    const x=hero.x+this.facing*21,y=hero.y-27+Math.sin(this.previewFrames*12)*5
+    g.lineStyle(2,c,.73).lineBetween(x-3,y+8,x+this.facing*10,y-5)
+    g.fillStyle(c,.5).fillCircle(x+this.facing*8,y-3,3)
+   }
    if(this.shieldUntil>this.clock)g.lineStyle(2,0xffd489,.45).strokeEllipse(hero.x,hero.y-17,55,63)
    if(this.hiddenUntil>this.clock)g.fillStyle(0x59517c,.4).fillEllipse(hero.x,hero.y-16,42,42)
   }})
   actors.sort((a,b)=>a.y-b.y).forEach(a=>a.render())
+  this.portraits.end()
   this.bursts=this.bursts.filter(effect=>effect.end>this.clock)
   for(const effect of this.bursts){
    const t=(this.clock-effect.start)/(effect.end-effect.start), size=effect.radius*(.22+.78*t)

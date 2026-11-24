@@ -112,3 +112,17 @@ test('new relics round-trip and identified gear contributes bounded leech',()=>{
  hero.worn[0].element=12
  assert.throws(()=>decodeSave(JSON.stringify(hero)))
 })
+
+test('V2.1 graphics presets respect DPR, backing-pixel budget and adaptive fallback',async()=>{
+ const {backingRatio}=await import('../src/display.ts')
+ assert.equal(backingRatio('balanced',3,1000,600),1)
+ assert.equal(backingRatio('high',2,1000,600),2)
+ assert.equal(backingRatio('ultra',3,800,600),2.5)
+ assert.ok(backingRatio('ultra',3,1200,900)**2*1200*900<=4_000_001)
+ assert.equal(backingRatio('ultra',3,1200,900,true),1)
+ const old=createHero('清晰',0)
+ const current=decodeSave(JSON.stringify({...old,preferences:{...old.preferences,detail:'ultra',size:1.35}}))
+ assert.equal(current.preferences.detail,'ultra')
+ assert.equal(current.preferences.size,1.35)
+ assert.equal(current.bag[0].uid,old.bag[0].uid)
+})

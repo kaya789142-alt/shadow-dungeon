@@ -6,9 +6,11 @@ import type { Gear, Material, Quest } from './data'
 import { entry, exit, HEIGHT, WIDTH } from './art'
 import { icon } from './icons'
 import { sound, unlock, volume } from './sound'
+import { playerArt } from './portrait-sprites'
 import { World } from './world'
 import './style.css'
 import './v2.css'
+import './v21.css'
 
 const app=document.querySelector<HTMLElement>('#app')!
 const select=<T extends HTMLElement=HTMLElement>(selector:string)=>document.querySelector<T>(selector)!
@@ -19,7 +21,7 @@ const skillIcons=['skill','spark','shield','star','crest']
 const action=(key:string,label:string,content:string,css='')=>`<button type="button" class="${css}" data-action="${key}" aria-label="${escape(label)}" title="${escape(label)}">${content}</button>`
 app.innerHTML=`
  <header class="topbar">
-  <button class="brand" data-action="home" aria-label="暗影地下城首頁"><span class="brand-mark">${icon('crest',26)}</span><span><strong>暗影地下城</strong><small>SHADOW DUNGEON <em>V2.0</em></small></span></button>
+  <button class="brand" data-action="home" aria-label="暗影地下城首頁"><span class="brand-mark">${icon('crest',26)}</span><span><strong>暗影地下城</strong><small>SHADOW DUNGEON <em>V2.1</em></small></span></button>
   <div class="top-location">${icon('compass',16)}<span>艾瑟蘭王國</span><span class="top-divider"></span><span id="top-zone">燼燈村</span></div>
   <nav class="compact-nav" aria-label="遊戲選單">${nav.map(([key,label])=>action(key,label,icon(key,17)+`<span>${label}</span>`)).join('')}</nav>
   <div class="top-tools"><span class="online"><i></i>單人冒險</span>${action('settings','音量與設定',icon('volume'),'icon-button')}${action('fullscreen','全螢幕',icon('expand'),'icon-button')}</div>
@@ -82,9 +84,12 @@ const world=new World(hero,{
 pixelPrefs()
 const textSample=vendors.join('')+allMonsters.map(m=>m.name).join('')+zones.map(z=>z[0]).join('')+'爆擊閃避未命中吸血'+elements.join('')
 const fontReady=document.fonts?.load('700 16px "Noto Sans TC Variable"',textSample)??Promise.resolve()
-void Promise.race([fontReady.catch(()=>{}),new Promise(resolve=>setTimeout(resolve,1250))]).then(()=>new Phaser.Game({type:Phaser.CANVAS,parent:'game',backgroundColor:'#25242c',pixelArt:false,render:{antialias:true,powerPreference:'low-power'},scale:{mode:Phaser.Scale.RESIZE,width:'100%',height:'100%'},input:{touch:{capture:true}},scene:world}))
+void fontReady.catch(()=>document.fonts?.ready).then(()=>new Phaser.Game({type:Phaser.CANVAS,parent:'game',backgroundColor:'#25242c',pixelArt:false,render:{antialias:true,powerPreference:'low-power'},scale:{mode:Phaser.Scale.NONE,width:Math.max(1,select('#game').clientWidth),height:Math.max(1,select('#game').clientHeight)},input:{touch:{capture:true}},scene:world}))
 volume(hero.music,hero.sfx,hero.preferences.ambience)
-function pixelPrefs(){ app.style.setProperty('--font-scale',String(hero.preferences.size)) }
+function pixelPrefs(){
+ app.style.setProperty('--font-scale',String(hero.preferences.size))
+ app.dataset.textSize=hero.preferences.size>=1.3?'largest':hero.preferences.size>=1.1?'large':'standard'
+}
 
 function message(text:string,style=''){
  logs.unshift({text,style});logs.length=Math.min(4,logs.length)
@@ -119,7 +124,7 @@ function paint(){
  const portrait=select('#portrait-symbol')
  if(portrait.dataset.job!==String(hero.job)){
   portrait.dataset.job=String(hero.job)
-  portrait.innerHTML=icon(['shield','cross','spark','sword','crest'][hero.job],27)
+  portrait.innerHTML=`<img alt="" src="${playerArt(hero.job)}">`
   portrait.style.color='#'+job.color.toString(16)
  }
  setText('top-zone',region[0]);setText('map-name',region[0]);setText('gold',hero.gold.toLocaleString('zh-TW'))
@@ -232,7 +237,7 @@ function start(loaded:boolean){
  hero.hp=Math.min(stats.hp,hero.hp);hero.mp=Math.min(stats.mp,hero.mp)
  if(hero.hp<=0)world.revive()
  titleState='play';world.activePlay=true;world.blocked=false;panel=''
- volume(hero.music,hero.sfx,hero.preferences.ambience);pixelPrefs();storeProgress();paint();renderPanel()
+ volume(hero.music,hero.sfx,hero.preferences.ambience);pixelPrefs();world.applyDetail();storeProgress();paint();renderPanel()
  message(hero.zone===0?'燼燈村 · 安全區域':zones[hero.zone][0])
 }
 function modal(body:string,extra=''){
@@ -254,7 +259,7 @@ function renderPanel(){
  if(titleState==='create'){
   root.innerHTML=modal(`<div class="dialog-head"><div><span class="eyebrow">CHARACTER CREATION</span><h2>建立冒險者</h2></div>${action('home','回到首頁',icon('close'),'icon-button')}</div>
    <form id="character-form"><label class="field-label" for="new-name">角色名稱</label><input class="name-input" id="new-name" name="name" maxlength="16" required placeholder="輸入你的名字">
-   <span class="field-label">選擇職業</span><div class="class-grid">${jobs.map((job,i)=>`<button class="class-card ${i===jobIndex?'selected':''}" style="--job:#${job.color.toString(16)}" type="button" data-action="job:${i}" aria-pressed="${i===jobIndex}"><span>${job.glyph}</span><strong>${job.name}</strong><small>${job.title}</small></button>`).join('')}</div>
+   <span class="field-label">選擇職業</span><div class="class-grid">${jobs.map((job,i)=>`<button class="class-card ${i===jobIndex?'selected':''}" style="--job:#${job.color.toString(16)}" type="button" data-action="job:${i}" aria-pressed="${i===jobIndex}"><span class="class-portrait"><img src="${playerArt(i)}" alt=""></span><strong>${job.name}</strong><small>${job.title}</small></button>`).join('')}</div>
    <p id="class-description" class="class-description">${jobs[jobIndex].description}</p><button type="submit" class="button primary">${icon('arrow',18)} 進入燼燈村</button></form>`,'create-modal')
   return
  }
@@ -327,11 +332,11 @@ function renderBody(){
    group('變身圖鑑',morphs.map(([name,,move,atk],i)=>row(name,'移速 '+Math.round(move*100)+'% · 攻速 '+Math.round(atk*100)+'%',hero.morphs.includes(i)?button('morph:'+i,'變身'):badge('未解鎖'))).join(''))+
    group('召喚生物',pets.map(p=>row(p[0],p[2])).join(''))+
    group('魔物圖鑑',allMonsters.map(m=>row(hero.bestiary[m.id]?m.name:'未記錄的魔物',zones[m.zone][0]+' · '+m.rank,badge('擊敗 '+(hero.bestiary[m.id]??0)))).join(''))
-  case 'settings':return group('畫面與操作',`<label class="volume-row">字體大小 <input id="text-size" type="range" min="1" max="1.4" step="0.1" value="${hero.preferences.size}"></label>
-   <label class="volume-row">畫質 <select id="detail"><option value="high">精緻</option><option value="balanced" ${hero.preferences.detail==='balanced'?'selected':''}>省電</option></select></label>
+  case 'settings':return group('畫面與操作',`<label class="volume-row">字體大小 <select id="text-size"><option value="1">標準</option><option value="1.15" ${hero.preferences.size>=1.1&&hero.preferences.size<1.3?'selected':''}>大字體</option><option value="1.35" ${hero.preferences.size>=1.3?'selected':''}>特大字體</option></select></label>
+   <label class="volume-row">畫質 <select id="detail"><option value="balanced" ${hero.preferences.detail==='balanced'?'selected':''}>標準</option><option value="high" ${hero.preferences.detail==='high'?'selected':''}>高畫質</option><option value="ultra" ${hero.preferences.detail==='ultra'?'selected':''}>極致畫質</option></select></label>
    <label class="volume-row">地面點擊 <select id="click-mode"><option value="move">移動與互動</option><option value="interact" ${hero.preferences.click==='interact'?'selected':''}>只互動，使用搖桿移動</option></select></label>
    <label class="toggle"><input id="shake" type="checkbox" ${hero.preferences.shake?'checked':''}> 啟用爆擊震動</label>`)+group('音訊',`<label class="volume-row">背景音樂 <input id="music" type="range" min="0" max="1" step="0.05" value="${hero.music}"></label><label class="volume-row">遊戲音效 <input id="sfx" type="range" min="0" max="1" step="0.05" value="${hero.sfx}"></label><label class="volume-row">環境音量 <input id="ambience" type="range" min="0" max="1" step="0.05" value="${hero.preferences.ambience}"></label>`)+
-   group('本機存檔',`<div class="tabs">${button('save','儲存進度')}${button('export','匯出存檔')}${button('fullscreen','切換全螢幕')}${button('import','匯入存檔')}${button('home','返回首頁')}</div>`)+group('操作',help())
+   group('本機存檔',`<div class="tabs">${button('save','儲存進度')}${button('export','匯出存檔')}${button('fullscreen','切換全螢幕')}${button('import','匯入存檔')}${button('home','返回首頁')}</div>`)+group('操作',help())+group('版本',row('暗影地下城 V2.1','美術、清晰字體與場景配樂更新'))
   case 'death':return `<div class="death">${icon('skull',44)}<p>你在暗影中倒下，失去 6% 的金幣。</p>${button('revive','在燼燈村復活','primary')}</div>`
   default:return ''
  }
@@ -521,12 +526,15 @@ app.addEventListener('input',event=>{
  if(target.id==='music'||target.id==='sfx'){
   hero[target.id]=Number(target.value);volume(hero.music,hero.sfx,hero.preferences.ambience);storeProgress()
  }
- if(target.id==='text-size'){hero.preferences.size=Number(target.value);pixelPrefs();storeProgress()}
  if(target.id==='ambience'){hero.preferences.ambience=Number(target.value);volume(hero.music,hero.sfx,hero.preferences.ambience);storeProgress()}
 })
 app.addEventListener('change',async event=>{
  const input=event.target as HTMLInputElement
- if(input.id==='detail'){hero.preferences.detail=input.value==='balanced'?'balanced':'high';storeProgress();return}
+ if(input.id==='text-size'){hero.preferences.size=Number(input.value);pixelPrefs();storeProgress();return}
+ if(input.id==='detail'){
+  hero.preferences.detail=input.value==='ultra'?'ultra':input.value==='balanced'?'balanced':'high'
+  world.applyDetail();storeProgress();return
+ }
  if(input.id==='click-mode'){hero.preferences.click=input.value==='interact'?'interact':'move';storeProgress();return}
  if(input.id==='shake'){hero.preferences.shake=input.checked;storeProgress();return}
  if(input.id==='risk'){confirmRisk=input.checked;return}

@@ -1,17 +1,21 @@
 import Phaser from 'phaser'
 import { chest, drawWorld, entry, exit, HEIGHT, npcPoints, refuge, rng, secret, sprite, WIDTH } from './art'
 import type { Obstacle, Pose } from './art'
-import { jobs, monsters, morphs, pets, qualityColors, rules, vendors, zones } from './data'
+import { allMonsters, elements, jobElements, jobs, morphs, pets, qualityColors, quests, rules, safeZone, vendors, zoneRoutes, zones } from './data'
 import type { Gear, Material } from './data'
-import { attributes, giveXp, makeGear, qualityRoll, record, spawn } from './model'
+import { attributes, giveXp, makeGear, makeRelic, qualityRoll, record, rollover, spawn } from './model'
 import type { Hero } from './model'
 import { sound, soundtrack } from './sound'
 import { clearPath, distance as dist, makeRoute } from './navigation'
 import type { Point } from './navigation'
+import { WorldText } from './world-text'
 
-type Monster={definition:typeof monsters[number]; x:number;y:number; home:Point; hp:number; max:number; hitAt:number; sleep:number; frozen:number; angry:boolean; hurt:number; tell?:{end:number;x:number;y:number; angle:number; phase:number}}
+type Monster={definition:typeof allMonsters[number]; x:number;y:number; home:Point; hp:number; max:number; hitAt:number; sleep:number; frozen:number; angry:boolean; hurt:number; tell?:{end:number;x:number;y:number; angle:number; phase:number}}
 type Loot={x:number;y:number; gold:number; material:Material; gear?:Gear}
-type Burst={x:number;y:number;end:number;start:number;color:number;radius:number;source?:Point}
+type Strike='slash'|'arrow'|'spell'|'ring'
+const riftPoint={x:900,y:535}
+const elementColors=[0xff995f,0x99dfff,0xffd477,0xc785e7,0xffe0a4]
+type Burst={x:number;y:number;end:number;start:number;color:number;radius:number;source?:Point;style:Strike}
 export type WorldCallbacks={message:(text:string,style?:string)=>void; npc:(index:number)=>void; refresh:()=>void; death:()=>void; ready:()=>void}
 const angle=(a:Point,b:Point)=>Math.atan2(b.y-a.y,b.x-a.x)
 const inside=(x:number,y:number)=>x>24&&x<WIDTH-24&&y>28&&y<HEIGHT-24
@@ -40,8 +44,10 @@ export class World extends Phaser.Scene {
  private lastTick=0
  private background?:Phaser.GameObjects.Image
  private graphics!:Phaser.GameObjects.Graphics
- private labels!:Phaser.GameObjects.Container
- private fx: Phaser.GameObjects.Text[]=[]
+ private worldText!:WorldText
+ private mapCache=new Map<number,Obstacle[]>()
+ private riftGuards:Monster[]=[]
+ private running=false
  private bursts:Burst[]=[]
  private keys?:Record<string,Phaser.Input.Keyboard.Key>
  private pose:Pose='idle'
@@ -61,10 +67,10 @@ export class World extends Phaser.Scene {
  constructor(hero:Hero,callbacks:WorldCallbacks){super('world');this.hero=hero;this.callbacks=callbacks}
  create(){
   this.graphics=this.add.graphics()
-  this.labels=this.add.container().setDepth(4)
+  this.worldText=new WorldText(document.querySelector<HTMLElement>('#world-text')!)
   this.cameras.main.setBounds(0,0,WIDTH,HEIGHT).setRoundPixels(true)
   this.scale.on('resize',()=>this.resize())
-  this.keys=this.input.keyboard?.addKeys('W,A,S,D,UP,DOWN,LEFT,RIGHT') as typeof this.keys
+  this.keys=this.input.keyboard?.addKeys('W,A,S,D,UP,DOWN,LEFT,RIGHT,SHIFT') as typeof this.keys
   this.input.keyboard?.addCapture(['SPACE','UP','DOWN','LEFT','RIGHT'])
   this.input.on('pointerdown',(pointer:Phaser.Input.Pointer)=>{
    if(!this.activePlay||this.blocked||this.dead)return
@@ -81,45 +87,53 @@ export class World extends Phaser.Scene {
  resize(){
   this.cameras.main.setZoom(Math.max(.74,Math.min(1.32,this.scale.width/1060,this.scale.height/440)))
   this.cameras.main.centerOn(this.hero.x,this.hero.y)
+
  }
  enter(zone:number,position?:Point,silent=false){
   this.hero.zone=zone
   this.background?.destroy()
-  if(this.textures.exists('map-'+zone))this.textures.remove('map-'+zone)
-  const map=drawWorld(this,zone)
+  const cached=this.mapCache.get(zone)
+  const map=cached
+   ?{world:this.add.image(0,0,'map-'+zone).setOrigin(0).setDepth(-2),obstacles:cached}
+   :drawWorld(this,zone)
+  this.mapCache.delete(zone)
+  this.mapCache.set(zone,map.obstacles)
+  if(this.mapCache.size>2){
+   const oldest=this.mapCache.keys().next().value!
+   this.mapCache.delete(oldest);this.textures.remove('map-'+oldest)
+  }
   this.background=map.world;this.obstacles=map.obstacles
-  const point=position??(zone===0?spawn:entry)
+  const point=position??(safeZone(zone)?spawn:entry)
   Object.assign(this.hero,point)
-  if(!this.passable(this.hero.x,this.hero.y))Object.assign(this.hero,zone===0?spawn:entry)
+  if(!this.passable(this.hero.x,this.hero.y))Object.assign(this.hero,safeZone(zone)?spawn:entry)
   this.destination=undefined;this.target=undefined;this.interaction=undefined;this.interactionPoint=undefined
-  this.loot=[];this.bursts=[];this.clickMarker=undefined;this.steerSide=1;this.route=[];this.routeGoal=undefined
+  this.riftGuards=[];this.loot=[];this.bursts=[];this.clickMarker=undefined;this.steerSide=1;this.route=[];this.routeGoal=undefined
   if(this.pet)Object.assign(this.pet,{x:this.hero.x-24,y:this.hero.y+18})
-  for(const text of this.fx)text.destroy()
-  this.fx=[]
-  this.labels.removeAll(true)
-  if(zone===0){
-   npcPoints.forEach((p,i)=>this.label(p.x,p.y-51,vendors[i],i===7?'#e9c780':'#cbc4c7'))
+  this.worldText.reset()
+  if(safeZone(zone)){
+   npcPoints.forEach((p,i)=>this.label(p.x,p.y-59-(i%2)*29,vendors[i],i===7?'#e9c780':'#cbc4c7'))
    this.label(774,523,'燼燈泉 · 恢復','#a9ced1')
   }else{
    this.label(chest.x,chest.y-25,this.hero.chests.includes(zone)?'空寶箱':'失落寶箱','#e4bf7b')
    this.label(secret.x,secret.y-87,this.hero.hidden.includes(zone)?'隱密神龕':'刻印石門','#d6b2eb')
    this.label(refuge.x,refuge.y-46,'隱密神龕','#d6b2eb')
   }
-  if(zone>0)this.label(entry.x,entry.y-96,zones[zone-1][0],'#b1dce1')
-  if(zone<7)this.label(exit.x,exit.y-96,zones[zone+1][0],'#e7bd86')
+  const [back,next]=zoneRoutes(zone)
+  if(back>=0)this.label(entry.x,entry.y-96,zones[back][0],'#b1dce1')
+  if(next>=0)this.label(exit.x,exit.y-96,zones[next][0],'#e7bd86')
+  if(zone>=9)this.label(riftPoint.x,riftPoint.y-43,'不穩定的裂隙','#f0b4ff')
+  if(!silent)record(this.hero,'visit')
   this.populate(zone)
   this.resize();this.explore()
   if(!silent){this.callbacks.message('抵達 '+zones[zone][0]);this.callbacks.refresh()}
  }
- private label(x:number,y:number,text:string,color:string){
-  this.labels.add(this.add.text(x,y,text,{fontFamily:'sans-serif',fontSize:11,color,backgroundColor:'#17151dcc',padding:{x:5,y:2}}).setOrigin(.5))
- }
+ private label(x:number,y:number,text:string,color:string){this.worldText.label({x,y},text,color)}
  private populate(zone:number){
   const random=rng(zone*25+551)
-  const defs=monsters.filter(m=>m.zone===zone)
+  const defs=allMonsters.filter(m=>m.zone===zone)
   this.mobs=[]
-  if(!zone)return
-  const safe=(p:Point)=>this.passable(p.x,p.y)&&dist(p,chest)>50&&dist(p,secret)>60&&dist(p,refuge)>115&&dist(p,exit)>80&&this.mobs.every(m=>dist(p,m)>58)
+  if(safeZone(zone))return
+  const safe=(p:Point)=>this.passable(p.x,p.y)&&dist(p,chest)>50&&dist(p,secret)>60&&dist(p,refuge)>115&&dist(p,exit)>80&&(zone<9||dist(p,riftPoint)>95)&&this.mobs.every(m=>dist(p,m)>58)
   const points:Point[]=[{x:292,y:530},{x:373,y:555},{x:467,y:521},{x:1200,y:590}]
   for(let i=0;i<defs.length;i++){
    const def=defs[i]
@@ -128,7 +142,12 @@ export class World extends Phaser.Scene {
     let p= n===0&&points[i]?points[i]:{x:260+random()*990,y:155+random()*730}
     for(let j=0;j<32&&!safe(p);j++)p={x:245+random()*1010,y:150+random()*740}
     if(!safe(p))continue
-    const max=(40+def.level*12+def.level**1.32*2.9)*(def.boss?6.2:def.rank==='精英'?2.35:def.rank==='稀有'?1.7:1)
+    if(def.rank==='世界魔王'&&(this.hero.stats.eclipseRespawn??0)>Math.floor(Date.now()/1000)){
+     const max=(40+def.level*12+def.level**1.32*2.9)*11.5
+     this.mobs.push({definition:def,home:p,...p,max,hp:0,hitAt:0,sleep:this.clock+this.hero.stats.eclipseRespawn-Math.floor(Date.now()/1000),frozen:0,angry:false,hurt:-10})
+     continue
+    }
+    const max=(40+def.level*12+def.level**1.32*2.9)*(def.rank==='世界魔王'?11.5:def.boss?6.2:def.rank==='精英'?2.35:def.rank==='稀有'?1.7:1)
     this.mobs.push({definition:def,home:p,...p,max,hp:max,hitAt:0,sleep:0,frozen:0,angry:false,hurt:0})
    }
   }
@@ -168,17 +187,20 @@ export class World extends Phaser.Scene {
   if(mob){this.lock(mob);return}
   const near=(q:Point,size=41)=>dist(p,q)<size||dist(p,{x:q.x,y:q.y-34})<size
   const zone=this.hero.zone
-  if(zone===0){
+  if(safeZone(zone)){
    const i=npcPoints.findIndex(q=>near(q,27))
    if(i>=0){this.approach(npcPoints[i],()=>this.callbacks.npc(i));return}
    if(near({x:774,y:510},34)){this.approach({x:774,y:510},()=>this.restore());return}
   }
-  if(zone>0&&near(entry)){this.approach(entry,()=>this.travel(zone-1,true));return}
-  if(zone<7&&near(exit)){this.approach(exit,()=>this.travel(zone+1));return}
-  if(zone>0&&near(chest,33)){this.approach(chest,()=>this.openChest());return}
-  if(zone>0&&near(secret)){this.approach(secret,()=>this.discover());return}
+  const [back,next]=zoneRoutes(zone)
+  if(back>=0&&near(entry,53)){this.approach(entry,()=>this.travel(back,true));return}
+  if(next>=0&&near(exit,53)){this.approach(exit,()=>this.travel(next));return}
+  if(zone>=9&&near(riftPoint,42)){this.approach(riftPoint,()=>this.activateRift());return}
+  if(!safeZone(zone)&&near(chest,33)){this.approach(chest,()=>this.openChest());return}
+  if(!safeZone(zone)&&near(secret,61)){this.approach(secret,()=>this.discover());return}
   const item=this.loot.find(item=>near(item,24))
   if(item){this.approach(item,()=>this.collect(item));return}
+  if(this.hero.preferences.click==='interact')return
   this.target=undefined;this.interaction=undefined;this.interactionPoint=undefined
   this.destination={x:Phaser.Math.Clamp(p.x,26,WIDTH-26),y:Phaser.Math.Clamp(p.y,30,HEIGHT-26)}
   this.routeGoal=undefined;this.clickMarker=this.destination;this.clickUntil=this.clock+.46
@@ -186,7 +208,7 @@ export class World extends Phaser.Scene {
  travel(zone:number,back=false){
   if(!zones[zone])return false
   if(this.hero.level<zones[zone][1]){this.callbacks.message('需要等級 '+zones[zone][1],'warn');return false}
-  this.enter(zone,zone===0?spawn:back?{x:exit.x-73,y:exit.y+6}:{x:entry.x+62,y:entry.y})
+  this.enter(zone,safeZone(zone)?spawn:back?{x:exit.x-73,y:exit.y+6}:{x:entry.x+62,y:entry.y})
   return true
  }
  restore(){
@@ -221,7 +243,9 @@ export class World extends Phaser.Scene {
   const stats=attributes(this.hero), job=jobs[this.hero.job]
   if(dist(this.hero,mob)>job.range||!this.line(this.hero,mob)||this.clock-this.lastAttack<stats.interval/(this.morph?morphs[this.morph.id][3]:1))return
   this.lastAttack=this.clock;this.facing=mob.x<this.hero.x?-1:1;this.setPose('attack')
-  this.burst(mob,job.color,32,job.range>100?this.hero:undefined);sound('hit')
+  const style=this.hero.job===1?'arrow':this.hero.job===2?'spell':'slash'
+  this.burst(mob,job.color,50,this.hero,style)
+  sound(style==='arrow'?'arrow':style==='spell'?'magic':'hit')
   this.hit(mob,this.hero.job===2?stats.magic:stats.attack,this.hero.job===2)
  }
  cast(index:number){
@@ -250,45 +274,59 @@ export class World extends Phaser.Scene {
     const a=angle(this.hero,target)
     for(let traveled=0;dist(this.hero,target)>45&&traveled<skill.range;traveled+=10)if(!this.walk(this.hero,Math.cos(a)*10,Math.sin(a)*10))break
    }
-   this.burst(skill.effect==='area'?center:valid?target:this.hero,job.color,skill.effect==='area'?100:48,valid&&job.range>100?this.hero:undefined)
+   this.burst(skill.effect==='area'?center:valid?target:this.hero,job.color,skill.effect==='area'?100:48,valid?this.hero:undefined,skill.effect==='area'?'ring':magic?'spell':job.range>100?'arrow':'slash')
    for(const mob of victims){
     if(skill.effect==='freeze')mob.frozen=this.clock+2.1*boost
-    this.hit(mob,damage,magic)
+    this.hit(mob,damage,magic,skill.effect==='freeze'?1:undefined)
    }
   }
   this.callbacks.refresh()
  }
- private hit(mob:Monster,power:number,magic:boolean){
+ private hit(mob:Monster,power:number,magic:boolean,spellElement?:number){
   if(mob.hp<=0)return
+  const hero=this.hero, stats=attributes(hero), weapon=hero.worn[0]
   this.hiddenUntil=0;mob.angry=true
-  const stats=attributes(this.hero)
-  if(Math.random()>stats.hit){this.float(mob,'未命中','#b9b0bc');return}
-  const crit=Math.random()<stats.crit
+  const enemyEvasion=mob.definition.rank==='稀有'?.055:mob.definition.rank==='世界魔王'?.075:.015
+  if(Math.random()>stats.hit-enemyEvasion){this.float(mob,'未命中','#e1d7de');return}
+  const critical=Math.random()<stats.crit+(hero.job===3?.06:0)
+  const element=spellElement??(weapon?.identified?weapon.element:undefined)??(magic?jobElements[hero.job]:undefined)
+  const weakness=(mob.definition.zone+mob.definition.id)%5
+  const elemental=element===undefined?0:Math.round(power*(element===weakness?.27:.10))
   const defense=mob.definition.level*(magic?.42:.79)
-  const damage=Math.max(2,Math.round((power*(.88+Math.random()*.25)*(this.pet?.id===1?1.13:1)-defense)*(crit?1.75:1)))
-  mob.hp=Math.max(0,mob.hp-damage);mob.hurt=this.clock+.19
-  this.float(mob,(crit?'暴擊 ':'')+damage,crit?'#ffd78d':magic?'#d9adff':'#fff0d7')
+  const damage=Math.max(2,Math.round((power*(.88+Math.random()*.25)*(this.pet?.id===1?1.13:1)-defense)*(critical?1.75:1)))+elemental
+  const dealt=Math.min(mob.hp,damage)
+  mob.hp-=dealt;mob.hurt=this.clock+.21
+  if(hero.preferences.shake&&critical)this.cameras.main.shake(92,.002,true)
+  this.float(mob,(critical?'爆擊 ':'')+damage+(elemental?'  '+elements[element!]+' +'+elemental:''),critical?'#ffd78d':magic?'#e5baff':'#fff0d7',critical)
+  if(stats.leech>0&&hero.hp<stats.hp){
+   const heal=Math.min(stats.hp-hero.hp,Math.ceil(dealt*stats.leech))
+   hero.hp+=heal
+   if(heal>=3)this.float(hero,'吸血 +'+Math.ceil(heal),'#a7efb0')
+  }
   if(!mob.hp)this.kill(mob)
  }
- private kill(mob:Monster){
+  private kill(mob:Monster){
   const def=mob.definition, hero=this.hero
-  mob.sleep=this.clock+(def.boss?46:14);mob.tell=undefined
+  mob.sleep=this.riftGuards.includes(mob)?Infinity:this.clock+(def.rank==='世界魔王'?125:def.boss?46:def.rank==='稀有'?35:14);mob.tell=undefined
+  if(def.rank==='世界魔王')hero.stats.eclipseRespawn=Math.floor(Date.now()/1000)+125
   if(this.target===mob)this.target=undefined
   const first=!hero.bestiary[def.id]
   hero.bestiary[def.id]=(hero.bestiary[def.id]??0)+1
   record(hero,'kill',1,def.id)
+  if(this.riftGuards.includes(mob)&&this.riftGuards.every(guard=>guard.hp<=0))this.resolveRift()
   if(def.boss){
    record(hero,'boss',1,def.id)
    if(first)record(hero,'bossUnique')
    this.callbacks.message(def.id===27?'黑暗魔王已敗退，古老封印重獲安寧。':'已擊敗 '+def.name,'gold')
   }
-  this.reward(Math.round((21+def.level*6)*(def.boss?7:1)))
+  this.reward(Math.round((21+def.level*6)*(def.rank==='世界魔王'?14:def.boss?7:def.rank==='精英'?1.8:1)))
   const roll=Math.random()
   const [shard,red,armor,weapon]=rules.materialCuts
   const material:Material=def.boss?'bless':roll<rules.book?'book':roll<shard?'shard':roll<red?'red':roll<armor?'armor':roll<weapon?'weapon':'blue'
-  const grade=qualityRoll(Math.random(),def.boss?2:def.rank==='精英'?1:0)
+  const grade=qualityRoll(Math.random(),def.rank==='世界魔王'?4:def.boss?2:def.rank==='精英'?1:0)
   const slot=Math.floor(Math.random()*9)
-  const gear=def.boss||Math.random()<rules.drop?makeGear(slot,grade,def.level,slot===0?hero.job:undefined):undefined
+  const gear=def.zone>=9&&(def.boss||grade>=3)?makeRelic(slot,grade,def.level,hero.job,def.zone-8):
+   def.boss||Math.random()<rules.drop?makeGear(slot,grade,def.level,slot===0?hero.job:undefined):undefined
   this.loot.push({x:mob.x,y:mob.y,gold:(11+def.level*4)*(def.boss?8:1),material,gear})
   if(gear&&grade>=3){sound('loot');this.callbacks.message('高品質裝備已掉落！','gold');this.burst(mob,colorNumber(qualityColors[grade]),91)}
   else sound('death')
@@ -320,7 +358,7 @@ export class World extends Phaser.Scene {
   const zone=this.hero.zone
   if(this.hero.chests.includes(zone)){this.callbacks.message('這個寶箱已經打開');return}
   this.hero.chests.push(zone);record(this.hero,'chest')
-  this.loot.push({...chest,gold:75*zone,material:'protect',gear:makeGear((zone+2)%9,2,zones[zone][1])})
+  this.loot.push({...chest,gold:75*zone,material:'protect',gear:zone>=9?makeRelic((zone+2)%8+1,3,zones[zone][1],this.hero.job,zone-8):makeGear((zone+2)%9,2,zones[zone][1])})
   this.collect(this.loot[this.loot.length-1])
   this.callbacks.message('發現失落寶箱','gold')
  }
@@ -337,7 +375,7 @@ export class World extends Phaser.Scene {
   if(this.dead)return
   const stats=attributes(this.hero), key=kind==='red'?'hp':'mp'
   if(!this.hero.items[kind]){this.callbacks.message('藥水不足','warn');return}
-  if(this.hero[key]>=stats[key]&&this.hero.zone!==0)return
+  if(this.hero[key]>=stats[key]&&!safeZone(this.hero.zone))return
   this.hero.items[kind]--;this.hero[key]=Math.min(stats[key],this.hero[key]+stats[key]*.46)
   record(this.hero,'potion');sound('heal');this.burst(this.hero,kind==='red'?0xeb7282:0x7ba9e6,45);this.callbacks.refresh()
  }
@@ -351,13 +389,11 @@ export class World extends Phaser.Scene {
   this.callbacks.message('變身為 '+morphs[index][0]+'，持續 120 秒','gold');sound('magic')
   this.burst(this.hero,morphs[index][1],70);this.callbacks.refresh()
  }
- burst(point:Point,color:number,radius:number,source?:Point){
-  this.bursts.push({x:point.x,y:point.y,color,radius,start:this.clock,end:this.clock+.42,source:source?{x:source.x,y:source.y}:undefined})
+ burst(point:Point,color:number,radius:number,source?:Point,style:Strike='ring'){
+  this.bursts.push({x:point.x,y:point.y,color,radius,style,start:this.clock,end:this.clock+.42,source:source?{x:source.x,y:source.y}:undefined})
  }
- private float(p:Point,text:string,color:string){
-  const obj=this.add.text(p.x,p.y-46,text,{fontFamily:'monospace',fontStyle:'bold',fontSize:17,color,stroke:'#251b24',strokeThickness:4}).setOrigin(.5).setDepth(7)
-  this.fx.push(obj)
-  this.tweens.add({targets:obj,y:p.y-83,alpha:0,duration:740,onComplete:()=>{obj.destroy();this.fx=this.fx.filter(item=>item!==obj)}})
+ private float(p:Point,text:string,color:string,critical=false){
+  this.worldText.damage(p,text,color,critical,this.previewFrames)
  }
  private setPose(pose:Pose){this.pose=pose;this.poseUntil=this.clock+.29}
  private hurt(mob:Monster,multiplier=1){
@@ -383,6 +419,7 @@ export class World extends Phaser.Scene {
    case 1:return along>=0&&along<length+45&&Math.abs(across)<32+t.phase*7
    case 2:return Math.hypot(dx,dy)<length&&Math.hypot(dx,dy)>43
    case 3:return Math.hypot(dx,dy)<length&&(Math.abs(dx)<37||Math.abs(dy)<37)
+   case 5:return Math.hypot(dx,dy)<length+36&&(Math.abs(dx)<25+t.phase*11||Math.abs(dy)<25+t.phase*11||Math.hypot(dx,dy)>105)
    default:return Math.hypot(dx,dy)<length&&Math.abs(Math.atan2(across,along))<.68+t.phase*.18
   }
  }
@@ -450,11 +487,13 @@ export class World extends Phaser.Scene {
    const dx=this.joystick.x+Number(!!(k?.D.isDown||k?.RIGHT.isDown))-Number(!!(k?.A.isDown||k?.LEFT.isDown))
    const dy=this.joystick.y+Number(!!(k?.S.isDown||k?.DOWN.isDown))-Number(!!(k?.W.isDown||k?.UP.isDown))
    const speed=187*(this.morph?morphs[this.morph.id][2]:1)*(this.pet?.id===0?1.09:1)
-   this.moving=false
+   this.moving=false;this.running=false
    if(dx||dy){
     const norm=Math.max(1,Math.hypot(dx,dy))
     this.destination=undefined;this.interaction=undefined;this.interactionPoint=undefined;this.target=undefined
-    this.moving=this.walk(hero,dx/norm*speed*dt,dy/norm*speed*dt)
+    this.running=!!k?.SHIFT.isDown||Math.hypot(this.joystick.x,this.joystick.y)>.9
+    const stride=speed*(this.running?1.21:1)
+    this.moving=this.walk(hero,dx/norm*stride*dt,dy/norm*stride*dt)
     if(dx)this.facing=dx>0?1:-1
    }else if(!this.interactNear()){
     if(this.auto&&!this.target&&!this.destination){
@@ -482,18 +521,97 @@ export class World extends Phaser.Scene {
    }
    if(this.clock-this.lastTick>.24){
     this.lastTick=this.clock
-    if(!this.dead)hero.hp=Math.min(stats.hp,hero.hp+(hero.zone===0?5:.25))
-    hero.mp=Math.min(stats.mp,hero.mp+(hero.zone===0?4:.65))
+    if(!this.dead)hero.hp=Math.min(stats.hp,hero.hp+(safeZone(hero.zone)?5:.25))
+    hero.mp=Math.min(stats.mp,hero.mp+(safeZone(hero.zone)?4:.65))
     this.explore()
    }
-   soundtrack(this.boss?'boss':hero.zone===0?'village':hero.zone===1?'forest':'dungeon')
+   soundtrack(this.boss?'boss':safeZone(hero.zone)?'village':hero.zone===1||hero.zone===10?'forest':'dungeon')
   }else this.moving=false
   const camera=this.cameras.main
   const cx=camera.scrollX+camera.width/2,cy=camera.scrollY+camera.height/2
   camera.centerOn(Phaser.Math.Linear(cx,this.hero.x,Math.min(1,dt*9)),Phaser.Math.Linear(cy,this.hero.y-15,Math.min(1,dt*9)))
   this.renderWorld()
  }
- private renderWorld(){
+ navigateQuest(){
+  const point=this.questPoint
+  if(!point||this.dead)return false
+  this.point(point)
+  this.clickMarker=point;this.clickUntil=this.clock+2
+  return true
+ }
+ get questPoint():Point|undefined {
+  const quest=quests.find(q=>q.id===this.hero.tracking)
+  if(!quest||this.hero.claims[quest.id])return undefined
+  const zone=this.hero.zone
+  if(quest.zone!==undefined&&quest.zone!==zone){
+   const [back,next]=zoneRoutes(zone)
+   if(quest.zone>=8&&zone<8)return zone===0?undefined:entry
+   if(quest.zone<8&&zone>=8)return entry
+   return quest.zone>zone&&next>=0?exit:back>=0?entry:undefined
+  }
+  if(quest.event==='chest')return chest
+  if(quest.event==='hidden')return secret
+  if(quest.event==='rift'&&zone>=9)return riftPoint
+  if(quest.event==='kill'||quest.event==='boss')return this.mobs.find(m=>m.hp>0&&(quest.event==='boss'?m.definition.boss:quest.target===undefined||m.definition.id===quest.target))
+  return undefined
+ }
+ blink(){
+  if(!this.hero.items.blink){this.callbacks.message('需要瞬間移動卷軸','warn');return false}
+  if(safeZone(this.hero.zone)){this.callbacks.message('瞬間移動卷軸只可在野外使用','warn');return false}
+  for(let i=0;i<30;i++){
+   const a=Math.random()*Math.PI*2, x=this.hero.x+Math.cos(a)*200,y=this.hero.y+Math.sin(a)*200
+   if(!this.passable(x,y)||this.mobs.some(m=>m.hp>0&&dist(m,{x,y})<85))continue
+   this.hero.items.blink--;Object.assign(this.hero,{x,y})
+   this.target=undefined;this.destination=undefined;this.interaction=undefined;this.interactionPoint=undefined
+   this.burst(this.hero,0xba96ff,91);sound('magic');this.explore();this.callbacks.refresh();return true
+  }
+  this.callbacks.message('附近找不到安全的落點','warn');return false
+ }
+ private activateRift(){
+  rollover(this.hero)
+  if(!!this.hero.stats['riftDay'+this.hero.zone]){this.callbacks.message('今天已淨化這道裂隙');return}
+  if(this.riftGuards.some(m=>m.hp>0)){this.callbacks.message('擊退裂隙守衛以完成淨化');return}
+  const definition=allMonsters.find(m=>m.zone===this.hero.zone&&m.rank==='精英')
+  if(!definition)return
+  const max=130+definition.level*17
+  this.riftGuards=[-1,1].map(side=>{
+   const home={x:riftPoint.x+side*70,y:riftPoint.y+side*19}
+   return {definition,home,...home,hp:max,max,hitAt:this.clock+1,sleep:0,frozen:0,angry:true,hurt:0}
+  })
+  this.mobs=[...this.mobs.filter(m=>Number.isFinite(m.sleep)),...this.riftGuards]
+  this.callbacks.message('裂隙開啟！擊退兩名守衛','warn');sound('magic')
+ }
+ private resolveRift(){
+  const zone=this.hero.zone
+  this.hero.stats['riftDay'+zone]=1;record(this.hero,'rift')
+  this.loot.push({...riftPoint,gold:zone*93,material:'blink',gear:makeRelic(7,3,zones[zone][1],this.hero.job,zone-8)})
+  this.callbacks.message('裂隙已淨化，遺物落在祭壇附近','gold');this.burst(riftPoint,0xe9acf6,116);sound('loot')
+ }
+ private ambient(){
+  const g=this.graphics, zone=this.hero.zone, t=this.previewFrames
+  if(safeZone(zone)){
+   for(let i=0;i<7;i++){
+    const x=742+i*10
+    g.lineStyle(1,0xb5ecdd,.20+.22*(.5+.5*Math.sin(t*3+i))).strokeEllipse(x,505+Math.sin(i*2+t*3)*4,12,3)
+   }
+   for(const [x,y] of [[475,487],[638,480],[912,480],[1120,487],[631,606],[911,606]]){
+    for(let j=3;j>0;j--)g.fillStyle(0xff9e52,.023+j*.006).fillEllipse(x,y-16,j*27+Math.sin(t*9+x)*5,j*21)
+    g.fillStyle(0xffb36a,.7).fillTriangle(x-4,y-27,x+Math.sin(t*12+x)*3,y-39,x+4,y-27)
+   }
+  }
+  if(zone===10&&this.hero.preferences.detail==='high'){
+   for(let i=0;i<16;i++){
+    const x=200+i*66+(t*7)%38, y=239+Math.sin(x/149)*17
+    g.lineStyle(1,0x9fddd4,.27+.18*Math.sin(t*2+i)).lineBetween(x,y-4+(i%5)*4,x+17,y-4+(i%5)*4)
+   }
+  }
+  if(zone>=9){
+   const c=zones[zone][4]
+   for(let i=0;i<3;i++)g.lineStyle(2,c,.37-i*.075).strokeEllipse(riftPoint.x,riftPoint.y-3,42+i*16+Math.sin(t*3)*9,17+i*6)
+   for(let i=0;i<8;i++)g.fillStyle(c,.55).fillCircle(riftPoint.x+Math.sin(t*2+i*2)*25,riftPoint.y-(t*(19+i)+i*9)%43,1.5)
+  }
+ }
+  private renderWorld(){
   const g=this.graphics, hero=this.hero, zone=hero.zone, accent=zones[zone][4], frame=Math.floor(this.previewFrames*7)
   g.clear()
   for(const p of [entry,exit]){
@@ -501,13 +619,13 @@ export class World extends Phaser.Scene {
    g.lineStyle(1,accent,.25+pulse*.35).strokeEllipse(p.x,p.y,48+pulse*22,13+pulse*8)
    g.fillStyle(accent,.3+pulse*.4).fillRect(p.x-1,p.y-35+Math.sin(this.previewFrames*2)*13,2,4)
   }
-  for(let i=0;i<41;i++){
+  for(let i=0;i<(hero.preferences.detail==='high'?41:13);i++){
    const x=(i*131+Math.sin(this.previewFrames*.3+i)*58+WIDTH)%WIDTH
    const y=(i*79-this.previewFrames*(6+i%7)+HEIGHT*100)%HEIGHT
    g.fillStyle(zone===0?0xffa762:accent,.14+.32*(.5+.5*Math.sin(this.previewFrames+i))).fillRect(Math.round(x),Math.round(y),i%5===0?3:2,2)
   }
   if(this.clickMarker&&this.clock<this.clickUntil)g.lineStyle(1,0xe8c798,.7).strokeEllipse(this.clickMarker.x,this.clickMarker.y,27,12)
-  if(zone>0){
+  if(!safeZone(zone)){
    const open=hero.chests.includes(zone)
    g.fillStyle(0x211721).fillRect(chest.x-15,chest.y-14,30,15)
    g.fillStyle(open?0x745644:0xbc824b).fillRect(chest.x-13,chest.y-13,26,10)
@@ -525,8 +643,12 @@ export class World extends Phaser.Scene {
     if(this.hazard(mob,{x,y}))g.fillStyle(0xff7065,.16+.08*Math.sin(this.previewFrames*12)).fillRect(x,y,9,9)
    }
   }
+  const focus=this.target?.hp?this.target:this.boss
+  this.worldText.target(focus&&{x:focus.x,y:focus.y-(focus.definition.boss?86:63)},focus?focus.definition.name+' · 等級 '+focus.definition.level:'')
+  this.worldText.update(this.cameras.main,this.previewFrames)
+  this.ambient()
   const actors:{y:number;render:()=>void}[]=[]
-  if(zone===0)npcPoints.forEach((p,i)=>actors.push({y:p.y,render:()=>{
+  if(safeZone(zone))npcPoints.forEach((p,i)=>actors.push({y:p.y,render:()=>{
    sprite(g,p.x,p.y,[0xc98276,0xa69b87,0xacb58a,0xb298d1,0xb9906e,0x9d9bae,0x7eb4ba,0xd7af7c,0xb085ab,0xad9bce][i],i%5,'idle',frame+i,1)
    if(i===7)g.fillStyle(0xffc778).fillRect(p.x-1,p.y-66,3,7).fillRect(p.x-1,p.y-57,3,2)
   }}))
@@ -536,7 +658,7 @@ export class World extends Phaser.Scene {
     const d=mob.definition
     if(d.rank==='精英'&&mob.hp>0)g.lineStyle(1,0xe6af77,.8).strokeEllipse(mob.x,mob.y,39,15)
     if(this.target===mob)g.lineStyle(2,0xf0a572,.9).strokeEllipse(mob.x,mob.y+2,d.boss?62:36,13)
-    sprite(g,mob.x,mob.y,d.color,5+d.id,mob.hp<=0?'dead':mob.hurt>this.clock?'hurt':mob.tell?'cast':mob.angry?'walk':'idle',frame+d.id,mob.x>hero.x?-1:1,d.boss)
+    sprite(g,mob.x,mob.y,d.color,5+d.id,mob.hp<=0?'dead':mob.hurt>this.clock?'hurt':mob.tell?'cast':mob.hitAt-this.clock>.93&&mob.angry?'attack':mob.angry?'walk':'idle',frame+d.id,mob.x>hero.x?-1:1,d.boss)
     if(mob.hp>0&&(this.target===mob||mob.angry)){
      const width=d.boss?60:32,y=mob.y-(d.boss?61:37)
      g.fillStyle(0x211824).fillRect(mob.x-width/2,y,width,4)
@@ -549,7 +671,7 @@ export class World extends Phaser.Scene {
    g.lineStyle(1,0xe6bd85,.76).strokeEllipse(hero.x,hero.y+2,42,14)
    g.fillStyle(0xe7ad6d,.15).fillEllipse(hero.x,hero.y+2,41,13)
    const mix=this.morph?morphs[this.morph.id]:undefined
-   sprite(g,hero.x,hero.y,mix?mix[1]:jobs[hero.job].color,mix?6+this.morph!.id:hero.job,this.dead?'dead':this.poseUntil>this.clock?this.pose:this.moving?'walk':'idle',frame,this.facing,false,!!mix)
+   sprite(g,hero.x,hero.y,mix?mix[1]:jobs[hero.job].color,mix?6+this.morph!.id:hero.job,this.dead?'dead':this.poseUntil>this.clock?this.pose:this.moving?(this.running?'run':'walk'):'idle',frame,this.facing,false,!!mix)
    if(this.shieldUntil>this.clock)g.lineStyle(2,0xffd489,.45).strokeEllipse(hero.x,hero.y-17,55,63)
    if(this.hiddenUntil>this.clock)g.fillStyle(0x59517c,.4).fillEllipse(hero.x,hero.y-16,42,42)
   }})
@@ -558,7 +680,16 @@ export class World extends Phaser.Scene {
   for(const effect of this.bursts){
    const t=(this.clock-effect.start)/(effect.end-effect.start), size=effect.radius*(.22+.78*t)
    g.lineStyle(2,effect.color,(1-t)*.78).strokeEllipse(effect.x,effect.y-7,size*1.3,size*.78)
-   if(effect.source&&t<.63){
+   if(effect.style==='slash'){
+    const facing=effect.source&&effect.x<effect.source.x?-1:1
+    g.lineStyle(4,effect.color,(1-t)*.78).beginPath().arc(effect.x-facing*11,effect.y-22,15+size*.56,facing<0?1.8:-1.35,facing<0?4.55:1.35).strokePath()
+   }
+   if(effect.source&&t<.63&&effect.style!=='slash'){
+    if(effect.style==='arrow'){
+     const direction=angle(effect.source,effect), x=Phaser.Math.Linear(effect.source.x,effect.x,t/.63),y=Phaser.Math.Linear(effect.source.y,effect.y,t/.63)-20
+     g.lineStyle(2,0xffe5ad,.98).lineBetween(x-Math.cos(direction)*18,y-Math.sin(direction)*18,x,y)
+     continue
+    }
     const x=Phaser.Math.Linear(effect.source.x,effect.x,t/.63),y=Phaser.Math.Linear(effect.source.y,effect.y,t/.63)-15
     g.lineStyle(2,effect.color,(1-t)*.8).lineBetween(effect.source.x,effect.source.y-15,x,y)
     g.fillStyle(effect.color,.88).fillCircle(x,y,4)

@@ -20,7 +20,12 @@ export const zones = [
  ['蜘蛛洞穴',16,0x42334b,0x2b2239,0xd4a5ec,'銀絲上結著凝固的古代魔力。'],
  ['火焰峽谷',23,0x532f2c,0x351f28,0xff9361,'赤紅煙塵覆蓋著封印的第一道裂口。'],
  ['暗影地下城',32,0x363252,0x241e38,0xbd9bf8,'王國留下的最後一塊封印在此沉睡。'],
- ['黑暗魔王城堡',42,0x49283b,0x2e1c30,0xf88494,'黑暗王座正等待新的挑戰者。']
+ ['黑暗魔王城堡',42,0x49283b,0x2e1c30,0xf88494,'黑暗王座正等待新的挑戰者。'],
+ ['灰港要塞',1,0x41433c,0x272a2c,0xf1bf77,'港城的商隊在此整備，東門通往古代遺跡。'],
+ ['沉星遺跡',12,0x304649,0x222e32,0x8cd4bd,'大殿長廊藏著通往深層地底的機關。'],
+ ['蒼龍谷',34,0x434c37,0x29342e,0xdfc595,'乾涸河谷迴盪著遠古蒼龍的嘶鳴。'],
+ ['深淵迴廊・一層',40,0x40434e,0x282531,0xabafcf,'被遺棄的守衛仍徘徊在石階下。'],
+ ['深淵迴廊・二層',47,0x492e40,0x281d29,0xef9da5,'血月升起時，世界魔王降臨祭壇。']
 ] as const
 const creatures = [
  ['苔芽史萊姆','灰脊狼人','尖刺毒蛾','苔冠貝希摩'],
@@ -39,10 +44,27 @@ const eliteNames=['荊棘樹魂','赤旗軍督','碎陵守衛','絲甲衛蛛','�
 export const monsters = [...baselineMonsters,...eliteNames.map((name,i)=>({
  id:28+i,zone:i+1,name,rank:'精英',boss:false,ranged:i===2||i===5,color:0xf8bc88,pattern:i%5,level:zones[i+1][1]+2
 }))]
-export type Gear = { uid:string; slot:number; grade:number; tier:number; plus:number; roll:number; job?:number; identified:boolean }
+export const safeZone=(id:number)=>id===0||id===8
+const routes=[[-1,1],[0,2],[1,3],[2,4],[3,5],[4,6],[5,7],[6,-1],[0,9],[8,10],[9,11],[10,12],[11,-1]]
+export const zoneRoutes=(zone:number)=>routes[zone]
+const expeditionNames=[
+ ['沉星巡衛','殘光祭使','灰翎石像','碎星執政官'],
+ ['谷底幼龍','峽谷巡翼','琥珀龍裔','蒼翼古龍'],
+ ['失誓獄卒','鏡面咒師','蒼鐵吞噬者','門扉看守'],
+ ['血月守衛','暮痕祭司','冥火幻獸','世界魔王・蝕月皇']
+]
+export const allMonsters=[...monsters,...expeditionNames.flatMap((names,region)=>names.map((name,i)=>({
+ id:35+region*4+i,zone:9+region,name,rank:i===3?(region===3?'世界魔王':'魔王'):i===2?'稀有':i===1?'精英':'普通',
+ boss:i===3,ranged:i===1,color:[0x9fc2a6,0xdbc28c,0xca96c0,0xe38e79][i],pattern:region===3?5:(region+2)%5,
+ level:Math.min(50,zones[9+region][1]+i)
+})))]
+export const elements=['火焰','寒霜','雷電','暗影','神聖'] as const
+export const jobElements=[2,1,0,3,4]
+export const relicNames=['灰港熔鋼','沉星遺產','蒼龍誓約','斷罪神諭','蝕月王印']
+export type Gear = { uid:string; slot:number; grade:number; tier:number; plus:number; roll:number; job?:number; identified:boolean; element?:number; leech?:number; relic?:number }
 const setNames = ['旅人','苔紋','夜銀','星燼','王印','無光']
-export const gearName = (gear:Gear) => setNames[gear.grade]+'・'+(gear.slot===0 ? jobs[gear.job??0].weapon : slots[gear.slot])+(gear.plus?' +'+gear.plus:'')
-export const materialNames = { red:'生命藥水',blue:'魔力藥水',weapon:'武器強化卷軸',armor:'防具強化卷軸',bless:'祝福強化卷軸',protect:'裝備保護卷軸',warp:'傳送卷軸',home:'回城卷軸',morph:'變身卷軸',identify:'鑑定卷軸',book:'技能書',shard:'影晶碎片' } as const
+export const gearName = (gear:Gear) => (gear.relic===undefined?setNames[gear.grade]:relicNames[gear.relic])+'・'+(gear.slot===0 ? jobs[gear.job??0].weapon : slots[gear.slot])+(gear.plus?' +'+gear.plus:'')
+export const materialNames = { red:'生命藥水',blue:'魔力藥水',weapon:'武器強化卷軸',armor:'防具強化卷軸',bless:'祝福強化卷軸',protect:'裝備保護卷軸',warp:'傳送卷軸',home:'回城卷軸',blink:'瞬間移動卷軸',morph:'變身卷軸',identify:'鑑定卷軸',book:'技能書',shard:'影晶碎片' } as const
 export type Material = keyof typeof materialNames
 export const morphs = [
  ['骷髏戰士',0xcac5ae,1.15,1],['暗影騎士',0xa88cdb,1,1.2],['狼族戰士',0xb59372,1.2,1.12],
@@ -59,12 +81,20 @@ export const quests:Quest[] = [
  {id:'learn',name:'導師的試煉',event:'learn',count:1},
  {id:'gather',name:'封印的碎片',event:'shard',count:5},
  {id:'daily',name:'每日委託・清除魔物',event:'kill',count:8,daily:true},
- ...zones.slice(1).flatMap(([name], index)=>[
+ ...zones.slice(1,8).flatMap(([name], index)=>[
    {id:'hunt'+index,name:name+'・狩獵令',event:'kill',count:6,zone:index+1,target:index*4},
    {id:'chest'+index,name:name+'・失落的寶箱',event:'chest',count:1,zone:index+1},
    {id:'hidden'+index,name:name+'・秘徑',event:'hidden',count:1,zone:index+1},
    {id:'boss'+index,name:'封印紀事・'+monsters[index*4+3].name,event:'boss',count:1,zone:index+1}
- ])
+ ]),
+ {id:'harbor',name:'遠行支線・灰港的使者',event:'visit',zone:8,count:1},
+ ...expeditionNames.flatMap(([name],i)=>[
+  {id:'exp-hunt'+i,name:'遠征狩獵・'+name,event:'kill',count:4,zone:9+i,target:35+i*4},
+  {id:'exp-relic'+i,name:'支線・封存的遺物',event:'chest',count:1,zone:9+i},
+  {id:'exp-event'+i,name:'支線・調查裂隙',event:'rift',count:1,zone:9+i},
+  {id:'exp-boss'+i,name:'遠征主線・'+expeditionNames[i][3],event:'boss',count:1,zone:9+i}
+ ]),
+ {id:'dailyRift',name:'每日委託・淨化裂隙',event:'rift',count:1,daily:true}
 ]
 export const achievements = [
  {id:'first',name:'破曉旅人',description:'擊敗第一隻魔物',event:'kill',count:1},

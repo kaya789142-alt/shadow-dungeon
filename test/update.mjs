@@ -27,7 +27,8 @@ const server=createServer(async(req,res)=>{
 await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve))
 const base=`http://127.0.0.1:${server.address().port}${prefix}`
 const browser=await chromium.launch({executablePath:process.env.SHADOW_CHROMIUM})
-const page=await browser.newPage()
+const context=await browser.newContext()
+let page=await context.newPage()
 const key='shadow-dungeon.v1'
 const button=(name)=>page.getByRole('button',{name,exact:true})
 const update=()=>page.evaluate(async()=>{const reg=await navigator.serviceWorker.getRegistration();await reg.update()})
@@ -53,11 +54,14 @@ try{
  directory=first
  await update()
  await waitController(current.id)
- // V2.1 did not listen for controllerchange. Use a new navigation inside the same installed scope.
- await page.goto(base+'?legacy-reopen=1')
+ // An already running V2.1 page does not have the V2.2 update listener.
+ await page.close()
+ page=await context.newPage()
+ await page.goto(base)
  await button('繼續冒險').click()
  assert.equal(await meta(),current.id)
  assert.equal((await read()).bag[0].uid,oldSave.bag[0].uid)
+ console.log('舊版視窗關閉後重新開啟，已載入新版並保留裝備')
  // A CDN serving older HTML during install must leave the current build in operation.
  directory=next
  mixed=true
@@ -68,6 +72,7 @@ try{
  })
  await waitController(current.id)
  assert.equal(await meta(),current.id)
+ console.log('混合的 CDN 內容已拒絕，維持可用建置')
  mixed=false
  await update()
  await page.waitForFunction(id=>document.querySelector('meta[name="shadow-build"]')?.content===id,candidate.id)

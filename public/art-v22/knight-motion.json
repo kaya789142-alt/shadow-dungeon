@@ -1,0 +1,54 @@
+{
+  "frames": {
+    "stride-a": {
+      "frame": {
+        "x": 2,
+        "y": 2,
+        "w": 307,
+        "h": 440
+      },
+      "rotated": false,
+      "trimmed": false
+    },
+    "stride-b": {
+      "frame": {
+        "x": 313,
+        "y": 2,
+        "w": 390,
+        "h": 440
+      },
+      "rotated": false,
+      "trimmed": false
+    },
+    "strike": {
+      "frame": {
+        "x": 707,
+        "y": 2,
+        "w": 430,
+        "h": 420
+      },
+      "rotated": false,
+      "trimmed": false
+    },
+    "recoil": {
+      "frame": {
+        "x": 1141,
+        "y": 2,
+        "w": 400,
+        "h": 440
+      },
+      "rotated": false,
+      "trimmed": false
+    },
+    "fall": {
+      "frame": {
+        "x": 1545,
+        "y": 2,
+        "w": 430,
+        "h": 315
+      },
+      "rotated": false,
+      "trimmed": false
+    }
+  }
+}

@@ -11,6 +11,8 @@ import { World } from './world'
 import './style.css'
 import './v2.css'
 import './v21.css'
+import './v22.css'
+import { release, releaseDate, trackRelease, versionLabel } from './release'
 
 const app=document.querySelector<HTMLElement>('#app')!
 const select=<T extends HTMLElement=HTMLElement>(selector:string)=>document.querySelector<T>(selector)!
@@ -21,7 +23,7 @@ const skillIcons=['skill','spark','shield','star','crest']
 const action=(key:string,label:string,content:string,css='')=>`<button type="button" class="${css}" data-action="${key}" aria-label="${escape(label)}" title="${escape(label)}">${content}</button>`
 app.innerHTML=`
  <header class="topbar">
-  <button class="brand" data-action="home" aria-label="暗影地下城首頁"><span class="brand-mark">${icon('crest',26)}</span><span><strong>暗影地下城</strong><small>SHADOW DUNGEON <em>V2.1</em></small></span></button>
+  <button class="brand" data-action="home" aria-label="暗影地下城首頁"><span class="brand-mark">${icon('crest',26)}</span><span><strong>暗影地下城</strong><small>SHADOW DUNGEON <em>${versionLabel}</em></small></span></button>
   <div class="top-location">${icon('compass',16)}<span>艾瑟蘭王國</span><span class="top-divider"></span><span id="top-zone">燼燈村</span></div>
   <nav class="compact-nav" aria-label="遊戲選單">${nav.map(([key,label])=>action(key,label,icon(key,17)+`<span>${label}</span>`)).join('')}</nav>
   <div class="top-tools"><span class="online"><i></i>單人冒險</span>${action('settings','音量與設定',icon('volume'),'icon-button')}${action('fullscreen','全螢幕',icon('expand'),'icon-button')}</div>
@@ -79,18 +81,26 @@ let confirmRisk=false
 let titleState:'title'|'create'|'play'='title'
 const logs:{text:string;style:string}[]=[{text:'歡迎來到燼燈村，冒險者。',style:'gold'},{text:'點擊地面探索，或使用方向鍵移動。',style:''}]
 const world=new World(hero,{
- message, npc:openNpc, refresh:()=>{paint();if(panel)renderPanel();if(titleState==='play')storeProgress()}, death:()=>openPanel('death'),ready:()=>{paint();renderPanel()}
+ message, npc:openNpc, refresh:()=>{paint();if(panel)renderPanel();if(titleState==='play')storeProgress()}, death:()=>openPanel('death'),failed:bootError,ready:()=>{paint();renderPanel()}
 })
 pixelPrefs()
-const textSample=vendors.join('')+allMonsters.map(m=>m.name).join('')+zones.map(z=>z[0]).join('')+'爆擊閃避未命中吸血'+elements.join('')
-const fontReady=document.fonts?.load('700 16px "Noto Sans TC Variable"',textSample)??Promise.resolve()
-void fontReady.catch(()=>document.fonts?.ready).then(()=>new Phaser.Game({type:Phaser.CANVAS,parent:'game',backgroundColor:'#25242c',pixelArt:false,render:{antialias:true,powerPreference:'low-power'},scale:{mode:Phaser.Scale.NONE,width:Math.max(1,select('#game').clientWidth),height:Math.max(1,select('#game').clientHeight)},input:{touch:{capture:true}},scene:world}))
+const textSample='暗影地下城角色技能任務背包裝備建立冒險者攻擊商店設定繼續遊戲繁體中文字型生命魔力更新版本'+hero.name+vendors.join('')+allMonsters.map(m=>m.name).join('')+zones.map(z=>z[0]).join('')+'爆擊閃避未命中吸血'+elements.join('')
+const fontReady=document.fonts?.load('700 16px "Noto Sans TC Variable"',textSample)??Promise.resolve([])
+void fontReady.then(loaded=>{
+ if(!loaded?.length)throw Error('Noto Sans TC')
+ app.dataset.font='noto-sans-tc'
+ return new Phaser.Game({type:Phaser.CANVAS,parent:'game',backgroundColor:'#25242c',pixelArt:false,render:{antialias:true,powerPreference:'low-power'},scale:{mode:Phaser.Scale.NONE,width:Math.max(1,select('#game').clientWidth),height:Math.max(1,select('#game').clientHeight)},input:{touch:{capture:true}},scene:world})
+}).catch(()=>bootError('繁體中文字型'))
 volume(hero.music,hero.sfx,hero.preferences.ambience)
 function pixelPrefs(){
- app.style.setProperty('--font-scale',String(hero.preferences.size))
+ app.style.setProperty('--read-scale',hero.preferences.size>=1.3?'1.15':hero.preferences.size>=1.1?'1':'.91')
  app.dataset.textSize=hero.preferences.size>=1.3?'largest':hero.preferences.size>=1.1?'large':'standard'
 }
 
+function bootError(asset:string){
+ const root=select('#modal-root')
+ root.innerHTML=modal(`<div class="dialog-head"><h2>資源載入失敗</h2></div><p>${escape(asset)}</p><p>載入完成後即可繼續冒險。</p><button class="button primary" data-action="retry-assets">重新載入</button>`,'system-modal')
+}
 function message(text:string,style=''){
  logs.unshift({text,style});logs.length=Math.min(4,logs.length)
  paintLog()
@@ -104,9 +114,9 @@ function paintLog(){
  select('#log-lines').innerHTML=logs.slice(0,2).map(row=>`<div class="${row.style}"><span>›</span> ${escape(row.text)}</div>`).join('')
 }
 function storeProgress(){
- if(titleState!=='play')return
- try{save(hero);hasSave=true;select('#save-state').innerHTML='<i></i> 已儲存'}
- catch{select('#save-state').textContent='存檔失敗'}
+ if(titleState!=='play')return true
+ try{save(hero);hasSave=true;select('#save-state').innerHTML='<i></i> 已儲存';return true}
+ catch{select('#save-state').textContent='存檔失敗';return false}
 }
 function progressBar(key:string,value:number,max:number){
  select('#'+key+'-fill').style.width=Math.min(100,100*value/max)+'%'
@@ -250,6 +260,7 @@ function renderPanel(){
    <div class="title-ornament"><span></span><i>${icon('crest',39)}</i><span></span></div>
    <div class="eyebrow title-kicker">SHADOW DUNGEON</div>
    <h1>暗影地下城</h1>
+   <p class="build-label" data-build="${release.id}">${versionLabel} · ${releaseDate}（台灣） · ${release.id}</p>
    <div class="title-rule"><i></i></div>
    <p class="title-copy">遠古封印已出現裂痕。<br>循著燼燈的微光，走入暗影。</p>
    <div class="title-buttons">${hasSave?button('continue',icon('arrow',18)+' 繼續冒險','primary'):button('create',icon('sword',18)+' 開始冒險','primary')}${hasSave?button('create','新的冒險','quiet'):''}</div>
@@ -257,7 +268,7 @@ function renderPanel(){
   return
  }
  if(titleState==='create'){
-  root.innerHTML=modal(`<div class="dialog-head"><div><span class="eyebrow">CHARACTER CREATION</span><h2>建立冒險者</h2></div>${action('home','回到首頁',icon('close'),'icon-button')}</div>
+  root.innerHTML=modal(`<div class="dialog-head"><div><span class="eyebrow">角色建立</span><h2>建立冒險者</h2></div>${action('home','回到首頁',icon('close'),'icon-button')}</div>
    <form id="character-form"><label class="field-label" for="new-name">角色名稱</label><input class="name-input" id="new-name" name="name" maxlength="16" required placeholder="輸入你的名字">
    <span class="field-label">選擇職業</span><div class="class-grid">${jobs.map((job,i)=>`<button class="class-card ${i===jobIndex?'selected':''}" style="--job:#${job.color.toString(16)}" type="button" data-action="job:${i}" aria-pressed="${i===jobIndex}"><span class="class-portrait"><img src="${playerArt(i)}" alt=""></span><strong>${job.name}</strong><small>${job.title}</small></button>`).join('')}</div>
    <p id="class-description" class="class-description">${jobs[jobIndex].description}</p><button type="submit" class="button primary">${icon('arrow',18)} 進入燼燈村</button></form>`,'create-modal')
@@ -289,7 +300,7 @@ function renderBody(){
    group('委託與封印紀事',quests.filter(q=>(!q.zone||zones[q.zone][1]<=hero.level+4||hero.quests[q.id]!==undefined)&&
     (questFilter==='all'||questFilter==='daily'&&q.daily||questFilter==='exp'&&(q.zone??0)>=8||questFilter==='active'&&hero.quests[q.id]!==undefined&&!hero.claims[q.id])).map(q=>{
    const points=hero.quests[q.id], claimed=hero.claims[q.id]
-   return row(q.name,questDescription(q)+' · '+(points??0)+' / '+q.count,claimed?badge('已領取'):points===undefined?button('accept:'+q.id,'接受'):button('track:'+q.id,hero.tracking===q.id?'追蹤中':'追蹤')+(points>=q.count?button('claim:'+q.id,'領取獎勵','primary'):hero.tracking===q.id&&(world.questPoint||q.zone!==undefined&&q.zone!==hero.zone)?button('quest-go','導航'):''))
+   return row(q.name,`<span class="quest-text">${questDescription(q)} · ${points??0} / ${q.count}</span>`,claimed?badge('已領取'):points===undefined?button('accept:'+q.id,'接受'):button('track:'+q.id,hero.tracking===q.id?'追蹤中':'追蹤')+(points>=q.count?button('claim:'+q.id,'領取獎勵','primary'):hero.tracking===q.id&&(world.questPoint||q.zone!==undefined&&q.zone!==hero.zone)?button('quest-go','導航'):''))
   }).join('')||empty('這個分類目前沒有可接取的任務。'))
   case 'skill':return group(jobs[hero.job].name+' · 技能快捷欄',jobs[hero.job].skills.map((skill,i)=>{
    const rank=hero.skills[i], level=1+i*2, books=rank||1
@@ -336,7 +347,7 @@ function renderBody(){
    <label class="volume-row">畫質 <select id="detail"><option value="balanced" ${hero.preferences.detail==='balanced'?'selected':''}>標準</option><option value="high" ${hero.preferences.detail==='high'?'selected':''}>高畫質</option><option value="ultra" ${hero.preferences.detail==='ultra'?'selected':''}>極致畫質</option></select></label>
    <label class="volume-row">地面點擊 <select id="click-mode"><option value="move">移動與互動</option><option value="interact" ${hero.preferences.click==='interact'?'selected':''}>只互動，使用搖桿移動</option></select></label>
    <label class="toggle"><input id="shake" type="checkbox" ${hero.preferences.shake?'checked':''}> 啟用爆擊震動</label>`)+group('音訊',`<label class="volume-row">背景音樂 <input id="music" type="range" min="0" max="1" step="0.05" value="${hero.music}"></label><label class="volume-row">遊戲音效 <input id="sfx" type="range" min="0" max="1" step="0.05" value="${hero.sfx}"></label><label class="volume-row">環境音量 <input id="ambience" type="range" min="0" max="1" step="0.05" value="${hero.preferences.ambience}"></label>`)+
-   group('本機存檔',`<div class="tabs">${button('save','儲存進度')}${button('export','匯出存檔')}${button('fullscreen','切換全螢幕')}${button('import','匯入存檔')}${button('home','返回首頁')}</div>`)+group('操作',help())+group('版本',row('暗影地下城 V2.1','美術、清晰字體與場景配樂更新'))
+   group('本機存檔',`<div class="tabs">${button('save','儲存進度')}${button('export','匯出存檔')}${button('fullscreen','切換全螢幕')}${button('import','匯入存檔')}${button('home','返回首頁')}</div>`)+group('操作',help())+group('版本',row('暗影地下城 '+versionLabel,releaseDate+'（台灣） · '+release.id)+row('角色與場景資源','已載入 '+world.assetCount+' 張圖像 · Noto Sans TC'))
   case 'death':return `<div class="death">${icon('skull',44)}<p>你在暗影中倒下，失去 6% 的金幣。</p>${button('revive','在燼燈村復活','primary')}</div>`
   default:return ''
  }
@@ -357,6 +368,7 @@ function shopGear(slot:number,grade:number){
 const materialSale=(item:Material)=>Math.max(1,Math.floor(materialPrice[item]*.45))
 const sellPrice=(g:Gear)=>12+g.grade*22+g.plus*4+g.tier
 function perform(key:string,element:HTMLElement){
+ if(key==='retry-assets'){location.reload();return}
  const [type,...args]=key.split(':'), id=args.join(':'), index=Number(id)
  const village=safeZone(hero.zone)
  if(type==='close'){closePanel();return}
@@ -581,6 +593,4 @@ for(const event of ['pointerup','pointercancel','lostpointercapture'])joystick.a
 document.addEventListener('visibilitychange',()=>{
  if(document.hidden){stick=undefined;world.joystick={x:0,y:0};knob.style.transform=''}
 })
-if(import.meta.env.PROD&&'serviceWorker' in navigator){
- void navigator.serviceWorker.register(new URL('sw.js',document.baseURI)).catch(()=>{})
-}
+trackRelease(storeProgress,()=>message('新版已就緒。請先匯出目前存檔，再重新載入。','warn'))

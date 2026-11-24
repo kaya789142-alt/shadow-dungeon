@@ -36,7 +36,7 @@ export class WorldText {
   this.focus.point=point
   if(this.focus.node.textContent!==text){this.focus.node.textContent=text;this.focus.width=undefined}
  }
- update(camera:Phaser.Cameras.Scene2D.Camera,elapsed:number,ratio=1){
+ update(camera:Phaser.Cameras.Scene2D.Camera,elapsed:number,ratio=1,hero?:Point){
   const zoom=camera.zoom, width=camera.width, height=camera.height
   // Phaser zooms around the camera viewport centre.
   const originX=camera.scrollX+width/2, originY=camera.scrollY+height/2
@@ -51,6 +51,10 @@ export class WorldText {
   if(measure)this.measuredAt=elapsed
   const viewportWidth=width/ratio,viewportHeight=height/ratio
   const taken:{x:number;y:number;halfW:number;halfH:number}[]=[]
+  if(hero){
+   const actor=project({x:hero.x,y:hero.y-39})
+   taken.push({...actor,halfW:21*zoom/ratio,halfH:39*zoom/ratio})
+  }
   for(const entry of [...(this.focus.node.hidden?[]:[this.focus]),...this.staticLabels]){
    const screen=project(entry.point)
    if(measure||entry.width===undefined){
@@ -58,14 +62,14 @@ export class WorldText {
     entry.height=entry.node.offsetHeight
    }
    const halfW=(entry.width||64)/2+2,halfH=(entry.height||27)/2+2
-   const x=screen.x
-   const accepts=(y:number)=>y>=halfH&&y<viewportHeight-halfH&&
+   const accepts=({x,y}:Point)=>x>=halfW&&x<viewportWidth-halfW&&y>=halfH&&y<viewportHeight-halfH&&
     taken.every(other=>Math.abs(other.x-x)>=other.halfW+halfW||Math.abs(other.y-y)>=other.halfH+halfH)
-   const y=[screen.y,screen.y-halfH*2,screen.y+halfH*2,screen.y+halfH*4].find(accepts)
-   entry.node.style.visibility=x<halfW||x>viewportWidth-halfW||y===undefined?'hidden':'visible'
-   if(y!==undefined&&x>=halfW&&x<=viewportWidth-halfW){
-    place(entry,x,y)
-    taken.push({x,y,halfW,halfH})
+   const spot=[[0,0],[0,-halfH*2],[0,halfH*2],[-halfW*.62,0],[halfW*.62,0],[0,halfH*4]]
+    .map(([dx,dy])=>({x:screen.x+dx,y:screen.y+dy})).find(accepts)
+   entry.node.style.visibility=spot?'visible':'hidden'
+   if(spot){
+    place(entry,spot.x,spot.y)
+    taken.push({...spot,halfW,halfH})
    }
   }
   this.floating=this.floating.filter(entry=>{

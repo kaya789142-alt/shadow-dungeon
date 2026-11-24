@@ -15,14 +15,34 @@ ROOT = Path(__file__).resolve().parents[1]
 SOUNDFONT = Path(sys.argv[1] if len(sys.argv) > 1 else '/usr/share/sounds/sf2/TimGM6mb.sf2')
 # BPM, number of four-beat bars, tonic, chord roots in semitones, GM instrumentation.
 SCORE = {
-    'title': (102, 56, 50, [0, 3, 10, 5, 0, 8, 3, 7], [48, 60, 52, 46, 71]),
-    'village': (88, 48, 55, [0, 7, 9, 5, 0, 2, 5, 7], [48, 46, 0, 25, 73]),
-    'forest': (84, 48, 57, [0, 5, 8, 10, 0, 7, 5, 3], [44, 46, 89, 14, 79]),
-    'graveyard': (72, 40, 50, [0, 1, 8, 5, 0, 6, 3, 7], [42, 47, 52, 14, 71]),
-    'dungeon': (81, 44, 45, [0, 1, 3, 6, 0, 8, 10, 7], [44, 47, 54, 14, 69]),
-    'battle': (122, 64, 50, [0, 3, 8, 7, 0, 5, 1, 7], [49, 61, 57, 45, 60]),
-    'boss': (116, 64, 48, [0, 1, 8, 5, 0, 6, 3, 7], [49, 61, 52, 47, 60]),
+    'title': (104, 64, 50, [0, 5, 3, 10, 8, 5, 1, 7], [48, 60, 52, 46, 71]),
+    'village': (86, 52, 55, [0, 4, 5, 2, 9, 5, 2, 7], [48, 46, 25, 0, 73]),
+    'forest': (78, 52, 57, [0, 10, 5, 3, 8, 0, 2, 7], [44, 46, 89, 14, 79]),
+    'graveyard': (68, 44, 47, [0, 6, 1, 8, 5, 3, 1, 7], [42, 47, 52, 14, 71]),
+    'dungeon': (77, 48, 45, [0, 1, 5, 8, 3, 6, 10, 7], [44, 47, 54, 14, 69]),
+    'battle': (126, 72, 50, [0, 5, 8, 3, 1, 0, 10, 7], [49, 61, 57, 45, 60]),
+    'boss': (112, 72, 48, [0, 1, 6, 3, 8, 1, 5, 7], [49, 61, 52, 47, 60]),
 }
+MOTIFS = {
+    'title': (0, 4, 7, 6, 2, 4), 'village': (2, 0, 1, 4, 3, 1),
+    'forest': (7, 4, 5, 3, 1, 2), 'graveyard': (0, 1, 0, 3, 1, 0),
+    'dungeon': (0, 5, 2, 1, 6, 0), 'battle': (0, 4, 3, 0, 2, 6),
+    'boss': (0, 0, 6, 4, 1, 0), 'victory': (0, 2, 4, 5, 6, 7),
+}
+FOLEY = {
+    'hit': [(9,38,74,.008,.08),(9,36,84,0,.12),(1,60,74,.026,.08),(9,51,70,.018,.3)],
+    'arrow': [(0,77,68,0,.14),(9,37,88,.032,.1),(9,50,63,.073,.15)],
+    'magic': [(0,68,71,0,.31),(1,72,84,.046,.39),(1,77,79,.103,.36),(0,84,68,.19,.56)],
+    'death': [(9,41,100,0,.19),(9,36,84,.06,.31),(0,41,69,.03,.44)],
+    'loot': [(1,76,80,0,.32),(1,81,73,.07,.38),(1,88,72,.15,.4)],
+    'forge': [(9,54,74,0,.1),(9,51,83,.035,.22),(1,72,71,.08,.42),(1,79,77,.17,.5)],
+    'fail': [(9,41,82,0,.19),(0,41,64,.02,.46)],
+    'heal': [(0,67,74,0,.36),(1,72,64,.07,.36),(0,76,66,.14,.44)],
+    'wind': [(0,67,36,0,.59),(0,72,29,.25,.46)],
+    'brook': [(1,76,42,.03,.32),(1,72,46,.22,.23),(1,80,42,.32,.33)],
+    'cavern': [(0,33,36,.05,.69),(9,43,52,.05,.31)],
+}
+
 lib = ct.CDLL(find_library('fluidsynth'))
 
 def bind(name, result, *parameters):
@@ -60,7 +80,7 @@ def arrange(name):
         at = bar*4
         section = bar//8
         degree = roots[bar%len(roots)] if bar != bars-1 else roots[-1]
-        root = tonic+degree
+        root = tonic+degree+(2 if section%5==3 and bar<bars-4 else 0)
         third = 4 if (major and degree in (0, 5, 7) or not major and degree in (3, 8, 10)) else 3
         chord = [root, root+third, root+7, root+12]
         dynamic = [0, 7, 13, 3, 15, 6, 12, 4][section%8]
@@ -75,8 +95,9 @@ def arrange(name):
             for idx, beat in enumerate(rhythm):
                 add(at+beat, .38, 3, chord[(idx+section)%4]+(12 if idx%3==2 else 0), 39+dynamic+randomizer.randint(0,9))
         if bar%8 not in (5, 7) or name=='victory':
-            pattern = themes[(section+bar//2)%len(themes)]
-            times = [0, .75, 1.5, 2.25, 3, 3.5] if energetic else [0, .75, 1.25, 2, 2.5, 3.25]
+            pattern = MOTIFS[name] if section%4 in (0,3) else themes[(section+bar//2)%len(themes)]
+            if section%4==2:pattern=tuple(reversed(pattern))
+            times = ([0, .5, 1.5, 2.25, 3, 3.5] if energetic else [0, .75, 1.25, 2, 2.5, 3.25]) if bar%4<2 else [0, 1, 1.65, 2, 2.8, 3.32]
             scale = [0, 2, third, 5, 7, 9 if major else 8, 10, 12]
             for i, beat in enumerate(times):
                 duration = (times[i+1] if i+1<len(times) else 3.88)-beat
@@ -85,13 +106,20 @@ def arrange(name):
             for beat in ([0, 1.5, 2, 3.25] if energetic else [0, 2.5]):
                 add(at+beat, .16, 9, 35 if beat%2==0 else 41, 65+dynamic)
             if bar%4==0:add(at, .34, 9, 49, 49+dynamic)
-        if name=='boss':
+        if name=='boss' or name=='title' and section%4>=2:
             for pitch in chord[1:]:add(at+.19, 3.55, 5, pitch, 57+dynamic)
         if name in {'graveyard','dungeon'} and bar%4==0:add(at+.1, 3.5, 5, root+12, 40+dynamic)
     return instruments, sorted(events), round(bars*4*seconds*RATE)
 
-def make_track(name):
-    instruments, events, length = arrange(name)
+def arrange_effect(name):
+    events=[]
+    for channel,note,volume,start,length in FOLEY[name]:
+        events.extend([(round(start*RATE),1,channel,note,volume),
+                       (round((start+length)*RATE),0,channel,note,0)])
+    return [122 if name in {'arrow','death','fail'} else 74, 10, 42, 46, 71], sorted(events), round(1.15*RATE)
+
+def make_track(name, effect=False):
+    instruments, events, length = arrange_effect(name) if effect else arrange(name)
     settings = new_settings()
     for key, value in [(b'synth.sample-rate', RATE), (b'synth.gain', .41), (b'synth.reverb.room-size', .71), (b'synth.reverb.level', .36)]:
         set_num(settings, key, value)
@@ -121,7 +149,7 @@ def make_track(name):
         envelope=f'afade=t=in:d=0.09,afade=t=out:st={duration-.26:.4f}:d=0.26'
         subprocess.run(['ffmpeg','-hide_banner','-loglevel','error','-y','-i',raw.name,'-af',
                         'highpass=f=38,acompressor=threshold=0.19:ratio=2.1:attack=18:release=180,volume=2.1,'+envelope,
-                        '-c:a','aac','-b:a','80k','-movflags','+faststart',str(ROOT/'public'/'score'/f'{name}.m4a')],
+                        '-c:a','aac','-b:a','80k','-movflags','+faststart',str(ROOT/'public'/('fx-v22' if effect else 'score-v22')/f'{name}.m4a')],
                        check=True)
         raw.close()
     finally:
@@ -132,3 +160,6 @@ if __name__=='__main__':
     for track in [*SCORE,'victory']:
         make_track(track)
         print(track,flush=True)
+    for effect in FOLEY:
+        make_track(effect,True)
+        print(effect,flush=True)

@@ -2,7 +2,6 @@ import Phaser from 'phaser'
 import { safeZone, zones } from './data'
 
 import { cobble, roofMaterial } from './terrain-material'
-import { drawAdventurer } from './actor-art'
 
 export const WIDTH=1500, HEIGHT=1024, TILE=32
 export type Obstacle={x:number;y:number;r:number}
@@ -152,10 +151,12 @@ export function drawWorld(scene:Phaser.Scene,zone:number){
   if(organic&&r()>.18){
    const shade=color(settlement?0x344744:0x344e44,ground,r()*.5)
    if(has('spruce')){
-    propsArt.push({name:'spruce',x,y,height:94*s,width:75*s,mirror:x%2>1})
+    const oak=has('oak')&&(Math.round(x*19+y*17)%5<2)
+    propsArt.push({name:oak?'oak':'spruce',x,y,height:(oak?96:103)*s,width:(oak?98:77)*s,mirror:x%2>1})
     for(let i=0;i<40;i++)r()
    }else pine(g,x,y,s,shade,r)
   }
+  else if(zone===3&&has('tomb'))propsArt.push({name:'tomb',x,y,height:43*s,width:39*s,mirror:x%2>1})
   else if(zone===3){
    oval(g,0x171a24,x,y+1,38*s,13*s,.5)
    ink(g,0x38394a,x-10*s,y-26*s,20*s,30*s);ink(g,0x626276,x-8*s,y-29*s,15*s,25*s)
@@ -172,7 +173,22 @@ export function drawWorld(scene:Phaser.Scene,zone:number){
    else house(g,x,y,c,r)
    obstacles.push({x,y:y-24,r:37})
   }
-  fountain(g,774,510);obstacles.push({x:774,y:501,r:35})
+  if(has('fountain'))propsArt.push({name:'fountain',x:774,y:513,height:119,width:124})
+  else fountain(g,774,510)
+  obstacles.push({x:774,y:501,r:35})
+  for(const [x,y] of [[487,454],[565,474],[710,439],[840,445],[925,467],[1095,522],[594,674],[646,673],[947,673]]){
+   const d=rng(x+y)
+   for(let i=0;i<22;i++){
+    const px=x+(d()-.5)*28,py=y+(d()-.5)*16
+    ink(g,i%3?0x526b46:0x819565,px,py,1,3)
+    if(i%6===0)oval(g,i%2?0xf0c67c:0xe89aa0,px,py-1,3,2,.86)
+   }
+  }
+  for(const [x,y,col] of [[508,483,0xa6514a],[1063,560,0x475b85]]){
+   ink(g,0x514137,x,y-42,3,44)
+   polygon(g,col,[[x+2,y-39],[x+27,y-37],[x+23,y-27],[x+28,y-18],[x+2,y-21]])
+   g.lineStyle(1,0xc3a978,.6).lineBetween(x+3,y-35,x+23,y-34)
+  }
   for(const [x,y] of [[475,487],[1120,487],[508,583],[1063,560],[638,480],[912,480],[631,606],[911,606]])torch(g,x,y)
   for(const [x,y] of [[567,384],[755,353],[943,372],[520,611],[1054,600]]){
    for(let i=0;i<4;i++)ink(g,0x1b1c24,x-60+i*4,y+10+i*4,12,2,.6)
@@ -226,10 +242,10 @@ export function drawWorld(scene:Phaser.Scene,zone:number){
   oval(g,accent,refuge.x,refuge.y,102,61,.12)
   g.lineStyle(1,accent,.56).strokeEllipse(refuge.x,refuge.y,86,53)
   gate(g,secret.x,secret.y,accent)
-  if(has('arch'))propsArt.push({name:'arch',...secret,height:97,width:85})
+  if(has('arch'))propsArt.push({name:zone>=4&&has('dungeon-arch')?'dungeon-arch':'arch',...secret,height:98,width:84})
  }
  gate(g,entry.x,entry.y,0x76b1c2);gate(g,exit.x,exit.y,accent)
- if(has('arch'))for(const point of [entry,exit])propsArt.push({name:'arch',...point,height:97,width:85})
+ if(has('arch'))for(const point of [entry,exit])propsArt.push({name:zone>=4&&has('dungeon-arch')?'dungeon-arch':'arch',...point,height:103,width:88})
  const key='map-'+zone
  const texture=scene.textures.createCanvas(key,WIDTH*2,HEIGHT*2)!
  g.setScale(2).generateTexture(key,WIDTH*2,HEIGHT*2)
@@ -245,6 +261,16 @@ export function drawWorld(scene:Phaser.Scene,zone:number){
   }
  }
  c.globalAlpha=.58
+ if(!organic&&zone!==3){
+  c.lineCap='round'
+  for(let i=0;i<80;i++){
+   const x=detail()*WIDTH,y=detail()*HEIGHT
+   if(path(x,y))continue
+   c.beginPath();c.moveTo(x,y)
+   c.lineTo(x+detail()*14,y+detail()*8-4);c.lineTo(x+19,y-2+detail()*12)
+   c.strokeStyle=i%2?'#14151f69':'#9aacc32a';c.lineWidth=detail()*1.1+.4;c.stroke()
+  }
+ }
  for(let y=473;y<599;y+=9)for(let x=-10+(Math.floor(y/9)%2)*12;x<WIDTH;x+=24){
   if(!path(x+12,y+4)||settlement&&x>480&&x<1120||x<177||x>1337)continue
   cobble(c,x+detail()*2-1,y+detail()*1.7-1,21+detail()*3,8,.72,detail)
@@ -276,46 +302,3 @@ export function drawWorld(scene:Phaser.Scene,zone:number){
  return {world,obstacles}
 }
 export type Pose='idle'|'walk'|'run'|'attack'|'cast'|'hurt'|'dead'
-const variants=[
- ['..bb....bb..','...b....b...','...bbbbbb...','..bbbbbbbb..','..bwbbbbwb..','..bbbbbbbb..','...bddddb...','....dddd....'],
- ['....bbbb....','...bbbbbb...','..bbbbbbbb..','..bwbwbwbb..','..bbbbbbbb..','..bdbdddbb..','..dddddddd..','...d.d.dd...'],
- ['..b......b..','..bb....bb..','...bbbbbb...','..bwb..bwb..','..bbbbbbbb..','...dddddd...','...dd.ddd...','..dd...ddd..'],
- ['..bb....bb..','...bbbbbb...','..bbbbbbbb..','..bwbbbbwb..','..bbbbbbbb..','...bwwwwb...','...dddddd...','..dddddddd..'],
- ['.....bb.....','....bbbb....','...bbbbbb...','..bbbbbbbb..','.....bwb....','....bbbbb...','..dddbbddd..','...dddddd...'],
- ['.b........b.','.bb......bb.','..b.bbbb.b..','...bbbbbb...','..bwbwwbwb..','.bbbbbbbbbb.','..ddd..ddd..','....dddd....']
-]
-export function sprite(g:Phaser.GameObjects.Graphics,x:number,y:number,c:number,kind:number,pose:Pose,frame:number,facing:number,big=false,transformed=false){
- const s=big?4:2.5, phase=frame%2===0?1:-1
- const bob=pose==='walk'||pose==='run'?phase*2:pose==='attack'?-4:pose==='cast'?-3:pose==='hurt'?2:Math.sin(frame*.6)
- const thrust=pose==='attack'?facing*7:pose==='hurt'?-facing*3:0
- const body=pose==='hurt'?0xffb0a5:c, shadow=color(body,0x151523,.57), highlight=color(body,0xffe6c1,.43)
- oval(g,0x11141b,x,y+2,big?57:32,big?20:12,.65)
- if(kind<5&&!transformed){drawAdventurer(g,x,y,c,kind,pose,frame,facing);return}
- if(pose==='dead'){ink(g,shadow,x-12,y-4,25,5);ink(g,body,x-9,y-8,18,4);return}
- y+=bob
- x+=thrust
- const left=x-6*s, top=y-16*s
- if(kind>=5||transformed){
-  const glyph=variants[transformed?kind-6:kind%variants.length]
-  glyph.forEach((row,ry)=>Array.from(row).forEach((p,rx)=>{
-   if(p!=='.')ink(g,p==='w'?0xffe0a2:p==='d'?shadow:body,left+rx*s,top+ry*s+5*s,Math.ceil(s),Math.ceil(s))
-  }))
-  if(kind%4!==1){
-   ink(g,shadow,x-8*s,y-4*s,4*s,2*s);ink(g,shadow,x+4*s,y-4*s,4*s,2*s)
-   ink(g,body,x-6*s,y-2*s+phase,3*s,2*s);ink(g,body,x+3*s,y-2*s-phase,3*s,2*s)
-  }
-  ink(g,highlight,x-3*s,y-10*s,4*s,1*s,.8)
-  for(let i=0;i<4;i++){
-   const side=i%2?1:-1, dx=x+side*(4+i%3)*s
-   g.lineStyle(1,highlight,.6).lineBetween(dx,y-(4+i)*s,dx+side*4,y-(6+i)*s)
-  }
-  if(pose==='cast')oval(g,highlight,x,y-19*s,18,7,.53)
-  if(big){
-   polygon(g,shadow,[[x-14,y-33],[x-32,y-59],[x-41,y-48],[x-51,y-52],[x-36,y-28],[x-19,y-19]])
-   polygon(g,shadow,[[x+14,y-33],[x+32,y-59],[x+41,y-48],[x+51,y-52],[x+36,y-28],[x+19,y-19]])
-   g.lineStyle(1,highlight,.65).lineBetween(x-15,y-30,x-35,y-55).lineBetween(x+15,y-30,x+35,y-55)
-   oval(g,0xffcd90,x-8,y-31,4,2);oval(g,0xffcd90,x+8,y-31,4,2)
-  }
-  return
- }
-}

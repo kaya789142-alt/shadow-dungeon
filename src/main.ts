@@ -1,12 +1,14 @@
 import Phaser from 'phaser'
-import { achievementTitles, attributes, createHero, decodeSave, expNeeded, load, makeGear, materials, record, rollover, save, spawn, upgrade, upgradeInfo } from './model'
-import { achievements, gearName, jobs, materialNames, monsters, morphs, pets, quality, qualityColors, quests, rules, slots, vendors, zones } from './data'
+import '@fontsource-variable/noto-sans-tc'
+import { achievementTitles, attributes, createHero, decodeSave, expNeeded, gearPower, load, makeGear, makeRelic, materials, record, rollover, save, spawn, upgrade, upgradeInfo } from './model'
+import { achievements, allMonsters, elements, gearName, jobs, materialNames, morphs, pets, quality, qualityColors, quests, rules, safeZone, slots, vendors, zoneRoutes, zones } from './data'
 import type { Gear, Material, Quest } from './data'
 import { entry, exit, HEIGHT, WIDTH } from './art'
 import { icon } from './icons'
 import { sound, unlock, volume } from './sound'
 import { World } from './world'
 import './style.css'
+import './v2.css'
 
 const app=document.querySelector<HTMLElement>('#app')!
 const select=<T extends HTMLElement=HTMLElement>(selector:string)=>document.querySelector<T>(selector)!
@@ -17,12 +19,13 @@ const skillIcons=['skill','spark','shield','star','crest']
 const action=(key:string,label:string,content:string,css='')=>`<button type="button" class="${css}" data-action="${key}" aria-label="${escape(label)}" title="${escape(label)}">${content}</button>`
 app.innerHTML=`
  <header class="topbar">
-  <button class="brand" data-action="home" aria-label="暗影地下城首頁"><span class="brand-mark">${icon('crest',26)}</span><span><strong>暗影地下城</strong><small>SHADOW DUNGEON</small></span></button>
+  <button class="brand" data-action="home" aria-label="暗影地下城首頁"><span class="brand-mark">${icon('crest',26)}</span><span><strong>暗影地下城</strong><small>SHADOW DUNGEON <em>V2.0</em></small></span></button>
   <div class="top-location">${icon('compass',16)}<span>艾瑟蘭王國</span><span class="top-divider"></span><span id="top-zone">燼燈村</span></div>
+  <nav class="compact-nav" aria-label="遊戲選單">${nav.map(([key,label])=>action(key,label,icon(key,17)+`<span>${label}</span>`)).join('')}</nav>
   <div class="top-tools"><span class="online"><i></i>單人冒險</span>${action('settings','音量與設定',icon('volume'),'icon-button')}${action('fullscreen','全螢幕',icon('expand'),'icon-button')}</div>
  </header>
  <section class="stage" aria-label="遊戲場景">
-  <div id="game"></div><div class="vignette"></div>
+  <div id="game"></div><div class="vignette"></div><div id="world-text" aria-hidden="true"></div>
   <div class="world-top">
    <button class="player-card" data-action="character" aria-label="角色資訊">
     <span id="portrait" class="portrait"><span id="portrait-symbol">${icon('shield',27)}</span><b id="level">1</b></span>
@@ -55,7 +58,7 @@ app.innerHTML=`
   <div id="modal-root"></div>
   <div id="toast" role="status" class="toast"></div>
  </section>
- <footer class="status"><div class="experience"><span>EXP</span><div class="experience-track"><i id="xp-fill"></i></div><b id="xp-numbers">0%</b></div><span class="gold">${icon('coin',16)} <b id="gold">180</b></span><span class="saved" id="save-state"><i></i> 本機存檔</span></footer>
+ <footer class="status"><div class="experience"><span>經驗值</span><div class="experience-track"><i id="xp-fill"></i></div><b id="xp-numbers">0%</b></div><span class="gold">${icon('coin',16)} <b id="gold">180</b></span><span class="saved" id="save-state"><i></i> 本機存檔</span></footer>
  <input type="file" id="import-file" accept=".json,application/json" hidden>
 `
 const storedHero=load()
@@ -65,6 +68,8 @@ let panel=''
 let jobIndex=0
 let previousFocus:HTMLElement|null=null
 let chosenGear=''
+let compareGear=''
+let questFilter='all'
 let activeShop=0
 let toastTimer=0
 let mapKey=''
@@ -74,8 +79,12 @@ const logs:{text:string;style:string}[]=[{text:'歡迎來到燼燈村，冒險�
 const world=new World(hero,{
  message, npc:openNpc, refresh:()=>{paint();if(panel)renderPanel();if(titleState==='play')storeProgress()}, death:()=>openPanel('death'),ready:()=>{paint();renderPanel()}
 })
-new Phaser.Game({type:Phaser.CANVAS,parent:'game',backgroundColor:'#25242c',pixelArt:true,render:{antialias:false,powerPreference:'low-power'},scale:{mode:Phaser.Scale.RESIZE,width:'100%',height:'100%'},input:{touch:{capture:true}},scene:world})
-volume(hero.music,hero.sfx)
+pixelPrefs()
+const textSample=vendors.join('')+allMonsters.map(m=>m.name).join('')+zones.map(z=>z[0]).join('')+'爆擊閃避未命中吸血'+elements.join('')
+const fontReady=document.fonts?.load('700 16px "Noto Sans TC Variable"',textSample)??Promise.resolve()
+void Promise.race([fontReady.catch(()=>{}),new Promise(resolve=>setTimeout(resolve,1250))]).then(()=>new Phaser.Game({type:Phaser.CANVAS,parent:'game',backgroundColor:'#25242c',pixelArt:false,render:{antialias:true,powerPreference:'low-power'},scale:{mode:Phaser.Scale.RESIZE,width:'100%',height:'100%'},input:{touch:{capture:true}},scene:world}))
+volume(hero.music,hero.sfx,hero.preferences.ambience)
+function pixelPrefs(){ app.style.setProperty('--font-scale',String(hero.preferences.size)) }
 
 function message(text:string,style=''){
  logs.unshift({text,style});logs.length=Math.min(4,logs.length)
@@ -129,20 +138,21 @@ function paint(){
  select('#boss').hidden=!boss
  if(boss){setText('boss-name',boss.definition.name+' · 等級 '+boss.definition.level);select('#boss-fill').style.width=(boss.hp/boss.max*100)+'%'}
  const tracker=select('#tracker'), quest=quests.find(q=>q.id===hero.tracking)
- const trackKey=quest?quest.id+hero.quests[quest.id]+hero.claims[quest.id]:''
+ const trackKey=quest?quest.id+hero.quests[quest.id]+hero.claims[quest.id]+hero.zone+!!world.questPoint:''
  if(tracker.dataset.key!==trackKey){
   tracker.dataset.key=trackKey
-  tracker.innerHTML=quest&&!hero.claims[quest.id]?`<div class="tracker-name"><i></i><b>${quest.name}</b></div><div class="tracker-detail">${questDescription(quest)} <span>${hero.quests[quest.id]??0}/${quest.count}</span></div>`:'<div class="tracker-detail">在任務簿選擇要追蹤的委託</div>'
+  tracker.innerHTML=quest&&!hero.claims[quest.id]?`<div class="tracker-name"><i></i><b>${quest.name}</b></div><div class="tracker-detail">${questDescription(quest)} <span>${hero.quests[quest.id]??0}/${quest.count}</span></div>${(world.questPoint||quest.zone!==undefined&&quest.zone!==hero.zone)?action('quest-go','導航至任務目標',icon('compass',15)+' 導航','nav-guide'):''}`:'<div class="tracker-detail">在任務簿選擇要追蹤的委託</div>'
  }
  const pct=hero.explored[hero.zone]?.length??0
  setText('map-progress','探索 '+pct+'%')
- const level=select('#map-level'), text=hero.zone===0?'安全區域':'建議等級 '+region[1]
+ const level=select('#map-level'), text=safeZone(hero.zone)?'安全區域':'建議等級 '+region[1]
  if(level.textContent!==text)level.innerHTML='<i></i>'+text
  drawMap()
 }
 function drawMap(){
  const canvas=select<HTMLCanvasElement>('#minimap'), c=canvas.getContext('2d')!
- const key=[hero.zone,Math.round(hero.x/7),Math.round(hero.y/7),hero.explored[hero.zone]?.length??0].join(':')
+ const marker=world.questPoint
+ const key=[marker&&Math.round(marker.x/7),marker&&Math.round(marker.y/7),hero.zone,Math.round(hero.x/7),Math.round(hero.y/7),hero.explored[hero.zone]?.length??0].join(':')
  if(key===mapKey)return
  mapKey=key
  c.fillStyle='#242233';c.fillRect(0,0,180,110)
@@ -161,8 +171,10 @@ function drawMap(){
  const point=(x:number,y:number,col:string,size=2)=>{
   c.fillStyle=col;c.fillRect(Math.round(x/WIDTH*180-size/2),Math.round(y/HEIGHT*110-size/2),size,size)
  }
- if(zone>0)point(entry.x,entry.y,'#8ab8c8',4)
- if(zone<7)point(exit.x,exit.y,'#d9aa6b',4)
+ const [back,next]=zoneRoutes(zone)
+ if(back>=0)point(entry.x,entry.y,'#8ab8c8',4)
+ if(next>=0)point(exit.x,exit.y,'#d9aa6b',4)
+ if(marker)point(marker.x,marker.y,'#92edaf',5)
  point(hero.x,hero.y,'#271e26',9);point(hero.x,hero.y,'#ffda8b',5)
 }
 paintLog()
@@ -177,9 +189,10 @@ const empty=(text:string)=>`<p class="empty">${text}</p>`
 const badge=(text:string)=>`<span class="badge">${text}</span>`
 const group=(title:string,body:string)=>`<section class="panel-group"><h3>${title}</h3>${body}</section>`
 const gearLabel=(g:Gear)=>`<span style="color:${qualityColors[g.grade]}">${gearName(g)}</span>`
-const gearDetail=(g:Gear)=>`${quality[g.grade]} · 裝備等級 ${g.tier}${g.identified?' · 附加屬性 +'+g.roll:' · 待鑑定'}`
-const materialPrice:Record<Material,number>={red:14,blue:16,weapon:33,armor:26,bless:180,protect:140,warp:34,home:25,morph:65,identify:31,book:62,shard:10}
-const shopMaterials:Partial<Record<number,Material[]>>={2:['red','blue'],3:['weapon','armor','warp','home','morph','identify'],8:['bless','protect','book','morph'],9:['book']}
+const gearStats=(g:Gear)=>[g.element!==undefined?elements[g.element]:'',g.leech?'吸血 '+g.leech+'%':''].filter(Boolean).join(' · ')
+const gearDetail=(g:Gear)=>`${quality[g.grade]} · 裝備等級 ${g.tier}${g.identified?' · 附加屬性 +'+g.roll+(gearStats(g)?' · '+gearStats(g):''):' · 待鑑定'}`
+const materialPrice:Record<Material,number>={red:14,blue:16,weapon:33,armor:26,bless:180,protect:140,warp:34,home:25,blink:38,morph:65,identify:31,book:62,shard:10}
+const shopMaterials:Partial<Record<number,Material[]>>={2:['red','blue'],3:['weapon','armor','warp','home','blink','morph','identify'],8:['bless','protect','book','morph'],9:['book']}
 const shopSlots:Partial<Record<number,number[]>>={0:[0],1:[1,2,3,4,5,6,7,8],8:[0,6,7,8]}
 const stock=(id:string,limit:number)=>Math.max(0,limit-(hero.stock[id]??0))
 const gradeToday=()=>2+new Date().getDate()%3
@@ -189,7 +202,7 @@ const sharedTitles:Record<string,string>={bag:'冒險背包',shield:'裝備欄',
 function openPanel(next:string){
  if(titleState!=='play')return
  if(!panel)previousFocus=document.activeElement as HTMLElement
- panel=next;world.blocked=true;chosenGear='';confirmRisk=false
+ panel=next;world.blocked=true;chosenGear='';compareGear='';confirmRisk=false
  renderPanel()
 }
 function closePanel(){
@@ -209,7 +222,7 @@ function start(loaded:boolean){
   const name=select<HTMLInputElement>('#new-name').value
   if(!name.trim()){select<HTMLInputElement>('#new-name').reportValidity();return}
   if(hasSave&&!window.confirm('開始新冒險會覆寫現有存檔。確定繼續？'))return
-  const settings={music:hero.music,sfx:hero.sfx}
+  const settings={music:hero.music,sfx:hero.sfx,preferences:{...hero.preferences}}
   hero=Object.assign(createHero(name,jobIndex),settings)
  }
  world.hero=hero
@@ -219,7 +232,7 @@ function start(loaded:boolean){
  hero.hp=Math.min(stats.hp,hero.hp);hero.mp=Math.min(stats.mp,hero.mp)
  if(hero.hp<=0)world.revive()
  titleState='play';world.activePlay=true;world.blocked=false;panel=''
- volume(hero.music,hero.sfx);storeProgress();paint();renderPanel()
+ volume(hero.music,hero.sfx,hero.preferences.ambience);pixelPrefs();storeProgress();paint();renderPanel()
  message(hero.zone===0?'燼燈村 · 安全區域':zones[hero.zone][0])
 }
 function modal(body:string,extra=''){
@@ -249,28 +262,30 @@ function renderPanel(){
  root.innerHTML=modal(`<div class="dialog-head"><div><span class="eyebrow">${zones[hero.zone][0]}</span><h2>${sharedTitles[panel]}</h2></div>${panel==='death'?'':action('close','關閉視窗',icon('close'),'icon-button')}</div><div class="panel-body">${renderBody()}</div>`,'system-modal')
 }
 function questDescription(quest:Quest){
- if(quest.target!==undefined)return '擊敗 '+monsters[quest.target].name
- return ({move:'在村莊移動',potion:'使用任一藥水',equip:'穿戴一件裝備',forge:'成功強化裝備',learn:'學習或升級技能',shard:'拾取影晶碎片',chest:'打開失落寶箱',hidden:'探索秘徑',boss:'擊敗區域魔王',kill:'擊敗任意魔物'} as Record<string,string>)[quest.event]
+ if(quest.target!==undefined)return '擊敗 '+allMonsters.find(m=>m.id===quest.target)?.name
+ return ({move:'在村莊移動',potion:'使用任一藥水',equip:'穿戴一件裝備',forge:'成功強化裝備',learn:'學習或升級技能',shard:'拾取影晶碎片',chest:'打開失落寶箱',hidden:'探索秘徑',boss:'擊敗區域魔王',kill:'擊敗任意魔物',visit:'抵達灰港要塞',rift:'擊退裂隙守衛'} as Record<string,string>)[quest.event]
 }
 function renderBody(){
- const village=hero.zone===0
+ const village=safeZone(hero.zone)
  switch(panel){
-  case 'bag':return group('裝備',hero.bag.map(g=>row(gearLabel(g),gearDetail(g),
-   (g.slot===0&&g.job!==hero.job?'':button('equip:'+g.uid,'穿戴'))+(g.identified?'':button('identify:'+g.uid,'鑑定')))).join('')||empty('背包沒有裝備。'))+
-    group('消耗品與材料',materials.filter(m=>hero.items[m]>0).map(m=>row(materialNames[m],'持有 '+hero.items[m],['red','blue','home','warp','morph'].includes(m)?button(m==='home'?'home-item':m,'使用'):'' )).join('')||empty('背包沒有材料。'))
+  case 'bag':return (compareGear?renderComparison(hero.bag.find(g=>g.uid===compareGear)):'')+group('裝備',hero.bag.map(g=>row(gearLabel(g),gearDetail(g),
+   (g.slot===0&&g.job!==hero.job?'':button('equip:'+g.uid,'穿戴'))+button('compare:'+g.uid,'比較')+(g.identified?'':button('identify:'+g.uid,'鑑定')))).join('')||empty('背包沒有裝備。'))+
+    group('消耗品與材料',materials.filter(m=>hero.items[m]>0).map(m=>row(materialNames[m],'持有 '+hero.items[m],['red','blue','home','warp','blink','morph'].includes(m)?button(m==='home'?'home-item':m,'使用'):'' )).join('')||empty('背包沒有材料。'))
   case 'shield':return group('已穿戴',slots.map((slot,i)=>{
    const g=hero.worn[i];return g?row(slot+' · '+gearLabel(g),gearDetail(g),button('unequip:'+i,'卸除')):row(slot,'空欄位')
   }).join(''))+(village?button('forge',icon('spark',16)+' 前往強化','primary'):'')
   case 'character':{
-   const a=attributes(hero), names=['力量','敏捷','智力','體質','精神','物理攻擊','魔法攻擊','防禦','命中','迴避','暴擊','攻擊間隔']
-   const values=[a.str,a.dex,a.int,a.con,a.spi,Math.round(a.attack),Math.round(a.magic),Math.round(a.defense),Math.round(a.hit*100)+'%',Math.round(a.evade*100)+'%',Math.round(a.crit*100)+'%',a.interval.toFixed(2)+' 秒']
+   const a=attributes(hero), names=['力量','敏捷','智力','體質','精神','物理攻擊','魔法攻擊','防禦','命中','迴避','爆擊','攻擊間隔','吸血']
+   const values=[a.str,a.dex,a.int,a.con,a.spi,Math.round(a.attack),Math.round(a.magic),Math.round(a.defense),Math.round(a.hit*100)+'%',Math.round(a.evade*100)+'%',Math.round(a.crit*100)+'%',a.interval.toFixed(2)+' 秒',Math.round(a.leech*100)+'%']
    return group(escape(hero.name)+' · '+jobs[hero.job].name,`<div class="stat-grid">${names.map((name,i)=>`<div><span>${name}</span><b>${values[i]}</b></div>`).join('')}</div>`)+
    group('稱號',achievementTitles(hero).map(a=>button('title:'+a.id,a.name,hero.title===a.name?'primary':'')).join(' ')||empty('完成成就後可裝備稱號。'))+button('codex','查看冒險圖鑑')
   }
-  case 'quest':return group('委託與封印紀事',quests.filter(q=>!q.zone||zones[q.zone][1]<=hero.level+4||hero.quests[q.id]!==undefined).map(q=>{
+  case 'quest':return '<div class="tabs">'+[['all','全部'],['active','進行中'],['daily','每日'],['exp','遠征']].map(([id,label])=>button('quest-filter:'+id,label,questFilter===id?'primary':'')).join('')+'</div>'+
+   group('委託與封印紀事',quests.filter(q=>(!q.zone||zones[q.zone][1]<=hero.level+4||hero.quests[q.id]!==undefined)&&
+    (questFilter==='all'||questFilter==='daily'&&q.daily||questFilter==='exp'&&(q.zone??0)>=8||questFilter==='active'&&hero.quests[q.id]!==undefined&&!hero.claims[q.id])).map(q=>{
    const points=hero.quests[q.id], claimed=hero.claims[q.id]
-   return row(q.name,questDescription(q)+' · '+(points??0)+' / '+q.count,claimed?badge('已領取'):points===undefined?button('accept:'+q.id,'接受'):button('track:'+q.id,hero.tracking===q.id?'追蹤中':'追蹤')+(points>=q.count?button('claim:'+q.id,'領取獎勵','primary'):''))
-  }).join(''))
+   return row(q.name,questDescription(q)+' · '+(points??0)+' / '+q.count,claimed?badge('已領取'):points===undefined?button('accept:'+q.id,'接受'):button('track:'+q.id,hero.tracking===q.id?'追蹤中':'追蹤')+(points>=q.count?button('claim:'+q.id,'領取獎勵','primary'):hero.tracking===q.id&&(world.questPoint||q.zone!==undefined&&q.zone!==hero.zone)?button('quest-go','導航'):''))
+  }).join('')||empty('這個分類目前沒有可接取的任務。'))
   case 'skill':return group(jobs[hero.job].name+' · 技能快捷欄',jobs[hero.job].skills.map((skill,i)=>{
    const rank=hero.skills[i], level=1+i*2, books=rank||1
    return row(skill.name+' '+badge('鍵位 '+(i+1)),(rank?'階級 '+rank+' · ':'未學習 · ')+skill.mana+' 魔力 · '+skill.cooldown+' 秒冷卻',
@@ -285,8 +300,10 @@ function renderBody(){
    const goods=shopSlots[activeShop]??[]
    return `<div class="tabs">${tabs}</div>`+group('商店庫存',material.map(m=>row(materialNames[m],materialPrice[m]+' 金幣 · 庫存 '+stock(m,limit),
     `<input aria-label="${materialNames[m]}購買數量" type="number" min="1" max="${Math.max(1,stock(m,limit))}" value="1">`+button('buy:'+m,'購買'))).join('')+
-    goods.map(s=>row(gearLabel(makeGear(s,grade,Math.max(1,hero.level),s===0?hero.job:undefined)),(45+grade*75)+' 金幣 · 庫存 '+stock(activeShop+':'+s,limit),button('purchase:'+s,'購買'))).join(''))+
-   group('出售裝備',hero.bag.map(g=>row(gearLabel(g),sellPrice(g)+' 金幣',button('sell:'+g.uid,'出售'))).join('')||empty('沒有可出售的裝備。'))
+    goods.map(s=>row(gearLabel(shopGear(s,grade)),(45+grade*75)+' 金幣 · 庫存 '+stock(activeShop+':'+s,limit),button('purchase:'+s,'購買'))).join(''))+
+   group('出售裝備',hero.bag.map(g=>row(gearLabel(g),sellPrice(g)+' 金幣',button('sell:'+g.uid,'出售'))).join('')||empty('沒有可出售的裝備。'))+
+   group('出售道具',materials.filter(m=>hero.items[m]>0).map(m=>row(materialNames[m],materialSale(m)+' 金幣／件 · 持有 '+hero.items[m],
+     `<input aria-label="${materialNames[m]}出售數量" type="number" min="1" max="${hero.items[m]}" value="1">`+button('sell-material:'+m,'出售'))).join('')||empty('沒有可出售的道具。'))
   }
   case 'forge':{
    if(!village)return empty('請返回燼燈村找強化師。')
@@ -309,20 +326,34 @@ function renderBody(){
   case 'codex':return group('成就',achievements.map(a=>row(a.name,a.description,badge(Math.min(hero.stats[a.event]??0,a.count)+' / '+a.count))).join(''))+
    group('變身圖鑑',morphs.map(([name,,move,atk],i)=>row(name,'移速 '+Math.round(move*100)+'% · 攻速 '+Math.round(atk*100)+'%',hero.morphs.includes(i)?button('morph:'+i,'變身'):badge('未解鎖'))).join(''))+
    group('召喚生物',pets.map(p=>row(p[0],p[2])).join(''))+
-   group('魔物圖鑑',monsters.map(m=>row(hero.bestiary[m.id]?m.name:'未記錄的魔物',zones[m.zone][0]+' · '+m.rank,badge('擊敗 '+(hero.bestiary[m.id]??0)))).join(''))
-  case 'settings':return group('音訊',`<label class="volume-row">背景音樂 <input id="music" type="range" min="0" max="1" step="0.05" value="${hero.music}"></label><label class="volume-row">遊戲音效 <input id="sfx" type="range" min="0" max="1" step="0.05" value="${hero.sfx}"></label>`)+
-   group('本機存檔',`<div class="tabs">${button('save','儲存進度')}${button('export','匯出存檔')}${button('import','匯入存檔')}${button('home','返回首頁')}</div>`)+group('操作',help())
+   group('魔物圖鑑',allMonsters.map(m=>row(hero.bestiary[m.id]?m.name:'未記錄的魔物',zones[m.zone][0]+' · '+m.rank,badge('擊敗 '+(hero.bestiary[m.id]??0)))).join(''))
+  case 'settings':return group('畫面與操作',`<label class="volume-row">字體大小 <input id="text-size" type="range" min="1" max="1.4" step="0.1" value="${hero.preferences.size}"></label>
+   <label class="volume-row">畫質 <select id="detail"><option value="high">精緻</option><option value="balanced" ${hero.preferences.detail==='balanced'?'selected':''}>省電</option></select></label>
+   <label class="volume-row">地面點擊 <select id="click-mode"><option value="move">移動與互動</option><option value="interact" ${hero.preferences.click==='interact'?'selected':''}>只互動，使用搖桿移動</option></select></label>
+   <label class="toggle"><input id="shake" type="checkbox" ${hero.preferences.shake?'checked':''}> 啟用爆擊震動</label>`)+group('音訊',`<label class="volume-row">背景音樂 <input id="music" type="range" min="0" max="1" step="0.05" value="${hero.music}"></label><label class="volume-row">遊戲音效 <input id="sfx" type="range" min="0" max="1" step="0.05" value="${hero.sfx}"></label><label class="volume-row">環境音量 <input id="ambience" type="range" min="0" max="1" step="0.05" value="${hero.preferences.ambience}"></label>`)+
+   group('本機存檔',`<div class="tabs">${button('save','儲存進度')}${button('export','匯出存檔')}${button('fullscreen','切換全螢幕')}${button('import','匯入存檔')}${button('home','返回首頁')}</div>`)+group('操作',help())
   case 'death':return `<div class="death">${icon('skull',44)}<p>你在暗影中倒下，失去 6% 的金幣。</p>${button('revive','在燼燈村復活','primary')}</div>`
   default:return ''
  }
 }
 function help(){
- return '<p class="help-copy">方向鍵或 WASD 移動，也可點擊地面或拖曳螢幕上的搖桿。點擊魔物即可鎖定並自動追擊。</p><div class="help-keys"><span><kbd>SPACE</kbd> 普通攻擊</span><span><kbd>1–5</kbd> 職業技能</span><span><kbd>Q</kbd> 生命藥水</span><span><kbd>R</kbd> 魔力藥水</span><span><kbd>E</kbd> 拾取</span><span><kbd>ESC</kbd> 關閉視窗</span></div>'
+ return '<p class="help-copy">方向鍵或 WASD 移動，按住 Shift 或將搖桿推到外圈可奔跑，也可點擊地面自動尋路。點擊魔物即可鎖定並自動追擊。</p><div class="help-keys"><span><kbd>SPACE</kbd> 普通攻擊</span><span><kbd>1–5</kbd> 職業技能</span><span><kbd>Q</kbd> 生命藥水</span><span><kbd>R</kbd> 魔力藥水</span><span><kbd>E</kbd> 拾取</span><span><kbd>ESC</kbd> 關閉視窗</span></div>'
 }
+function renderComparison(gear?:Gear){
+ if(!gear)return ''
+ const current=hero.worn[gear.slot], delta=gearPower(gear)-(current?gearPower(current):0)
+ const card=(item?:Gear)=>item?'<strong>'+gearLabel(item)+'</strong><p>'+gearDetail(item)+'</p>':'空欄位'
+ return group('比較'+slots[gear.slot],`<div class="comparison"><div><h4>目前裝備</h4>${card(current)}</div><div><h4>背包裝備</h4>${card(gear)}</div></div>
+ <p class="${delta<0?'warning':'advantage'}">${gear.slot===0?'攻擊力':'防禦力'} ${delta>=0?'+':''}${(delta*(gear.slot===0?1:.48)).toFixed(1)}</p>`)
+}
+function shopGear(slot:number,grade:number){
+ return hero.zone===8&&activeShop===8?makeRelic(slot,grade,hero.level,hero.job,0):makeGear(slot,grade,hero.level,slot===0?hero.job:undefined)
+}
+const materialSale=(item:Material)=>Math.max(1,Math.floor(materialPrice[item]*.45))
 const sellPrice=(g:Gear)=>12+g.grade*22+g.plus*4+g.tier
 function perform(key:string,element:HTMLElement){
  const [type,...args]=key.split(':'), id=args.join(':'), index=Number(id)
- const village=hero.zone===0
+ const village=safeZone(hero.zone)
  if(type==='close'){closePanel();return}
  if(type==='title-help'){
   select('#modal-root').innerHTML=modal(`<div class="dialog-head"><h2>操作指南</h2>${action('home','關閉視窗',icon('close'),'icon-button')}</div>${help()}`,'create-modal')
@@ -342,8 +373,11 @@ function perform(key:string,element:HTMLElement){
  if(type==='import'){select<HTMLInputElement>('#import-file').click();return}
  if(type==='fullscreen'){
   if(document.fullscreenElement)void document.exitFullscreen().catch(()=>message('無法退出全螢幕','warn'))
-  else if(document.documentElement.requestFullscreen)void document.documentElement.requestFullscreen().catch(()=>message('此裝置無法進入全螢幕','warn'))
-  else message('可從瀏覽器選單加入主畫面','gold')
+  else{
+   const immersive=()=>{app.classList.toggle('immersive');message('可從 Safari 分享選單加入主畫面，以全螢幕遊玩','gold')}
+   if(document.documentElement.requestFullscreen)void document.documentElement.requestFullscreen().catch(immersive)
+   else immersive()
+  }
   return
  }
  if(titleState!=='play'){
@@ -366,6 +400,13 @@ function perform(key:string,element:HTMLElement){
   world.auto=!world.auto;world.target=undefined
   message('自動練功已'+(world.auto?'開啟':'關閉'));paint();return
  }
+ if(type==='quest-go'){
+  const quest=quests.find(q=>q.id===hero.tracking)
+  if(world.navigateQuest()){closePanel();message('已開始任務導航','gold')}
+  else if(quest?.zone!==undefined&&quest.zone!==hero.zone)openPanel('travel')
+  return
+ }
+ if(type==='blink'){if(world.blink())closePanel();return}
  if(type==='red'||type==='blue'){world.usePotion(type);return}
  if(type==='home-scroll'||type==='home-item'){
   if(!hero.items.home){message('需要回城卷軸','warn');return}
@@ -377,6 +418,8 @@ function perform(key:string,element:HTMLElement){
  }
  const g=allGear().find(g=>g.uid===id)
  const bagItem=hero.bag.find(g=>g.uid===id)
+ if(type==='compare'&&bagItem){compareGear=compareGear===id?'':id;renderPanel();return}
+ if(type==='quest-filter'){questFilter=id;renderPanel();return}
  if(type==='equip'&&bagItem&&(bagItem.slot!==0||bagItem.job===hero.job)){
   const previous=hero.worn[bagItem.slot]
   hero.bag=hero.bag.filter(g=>g!==bagItem)
@@ -402,8 +445,12 @@ function perform(key:string,element:HTMLElement){
  }else if(type==='purchase'&&village&&(shopSlots[activeShop]??[]).includes(index)){
   const grade=activeShop===8?gradeToday():1, cost=45+grade*75, key=activeShop+':'+index
   if(cost>hero.gold||!stock(key,activeShop===8?3:25)){message('金幣不足或已售罄','warn');return}
-  hero.bag.push(makeGear(index,grade,hero.level,index===0?hero.job:undefined));hero.gold-=cost;hero.stock[key]=(hero.stock[key]??0)+1
+  hero.bag.push(shopGear(index,grade));hero.gold-=cost;hero.stock[key]=(hero.stock[key]??0)+1
   sound('loot')
+ }else if(type==='sell-material'&&village&&materials.includes(id as Material)){
+  const item=id as Material, count=element.parentElement?.querySelector('input')?.valueAsNumber??1
+  if(!Number.isInteger(count)||count<1||count>hero.items[item]){message('請輸入可出售的數量','warn');return}
+  hero.items[item]-=count;hero.gold+=materialSale(item)*count;sound('loot')
  }else if(type==='sell'&&village&&bagItem){
   hero.gold+=sellPrice(bagItem);hero.bag=hero.bag.filter(g=>g!==bagItem);sound('loot')
  }else if(type==='deposit'&&village&&bagItem){
@@ -431,14 +478,14 @@ function perform(key:string,element:HTMLElement){
   const quest=quests.find(q=>q.id===id)
   if(!quest)return
   if(type==='accept'&&hero.quests[id]===undefined){
-   const completed=quest.event==='chest'&&hero.chests.includes(quest.zone!)||quest.event==='hidden'&&hero.hidden.includes(quest.zone!)
+   const completed=quest.event==='chest'&&hero.chests.includes(quest.zone!)||quest.event==='hidden'&&hero.hidden.includes(quest.zone!)||quest.event==='visit'&&!!hero.explored[quest.zone!]?.length||quest.event==='rift'&&!!hero.stats['riftDay'+(quest.zone??hero.zone)]
    hero.quests[id]=completed?quest.count:quest.event==='shard'?Math.min(hero.items.shard,quest.count):0
    hero.tracking=id
   }else if(type==='track'&&hero.quests[id]!==undefined)hero.tracking=id
   else if(type==='claim'&&!hero.claims[id]&&hero.quests[id]>=quest.count){
    hero.claims[id]=true;hero.gold+=30+quest.count*7+(quest.zone??0)*27
    world.reward(28+quest.count*7+(quest.zone??0)*36)
-   if(quest.zone&&quest.event==='boss')hero.bag.push(makeGear((quest.zone+2)%9,3,zones[quest.zone][1]))
+   if(quest.zone&&quest.event==='boss')hero.bag.push(quest.zone>=9?makeRelic((quest.zone+2)%8+1,3,zones[quest.zone][1],hero.job,quest.zone-8):makeGear((quest.zone+2)%9,3,zones[quest.zone][1]))
    if(hero.tracking===id)hero.tracking=quests.find(q=>!hero.claims[q.id]&&hero.quests[q.id]!==undefined)?.id??''
    message('完成任務：'+quest.name,'gold')
   }
@@ -472,11 +519,16 @@ app.addEventListener('click',event=>{
 app.addEventListener('input',event=>{
  const target=event.target as HTMLInputElement
  if(target.id==='music'||target.id==='sfx'){
-  hero[target.id]=Number(target.value);volume(hero.music,hero.sfx);storeProgress()
+  hero[target.id]=Number(target.value);volume(hero.music,hero.sfx,hero.preferences.ambience);storeProgress()
  }
+ if(target.id==='text-size'){hero.preferences.size=Number(target.value);pixelPrefs();storeProgress()}
+ if(target.id==='ambience'){hero.preferences.ambience=Number(target.value);volume(hero.music,hero.sfx,hero.preferences.ambience);storeProgress()}
 })
 app.addEventListener('change',async event=>{
  const input=event.target as HTMLInputElement
+ if(input.id==='detail'){hero.preferences.detail=input.value==='balanced'?'balanced':'high';storeProgress();return}
+ if(input.id==='click-mode'){hero.preferences.click=input.value==='interact'?'interact':'move';storeProgress();return}
+ if(input.id==='shake'){hero.preferences.shake=input.checked;storeProgress();return}
  if(input.id==='risk'){confirmRisk=input.checked;return}
  if(input.id==='bless'||input.id==='protect'){confirmRisk=false;renderPanel();return}
  if(input.id!=='import-file'||!input.files?.[0])return
@@ -490,6 +542,7 @@ app.addEventListener('change',async event=>{
 document.addEventListener('keydown',event=>{
  if(event.key==='Escape'){if(panel)closePanel();else if(titleState==='create'){titleState='title';renderPanel()}return}
  if(titleState!=='play'||panel||event.repeat||event.ctrlKey||event.altKey||event.metaKey)return
+ if((event.target as HTMLElement).matches('button,input,select,textarea')&&event.key===' ')return
  const key=event.key.toLowerCase()
  if([' ','q','r','e',...keyboard].includes(key)){event.preventDefault();unlock()}
  if(key===' ')world.attack()
@@ -509,12 +562,16 @@ function stickMove(event:PointerEvent){
 }
 joystick.addEventListener('pointerdown',event=>{
  if(titleState!=='play'||panel)return
+ if(stick!==undefined)return
  stick=event.pointerId;joystick.setPointerCapture(stick);stickMove(event)
 })
 joystick.addEventListener('pointermove',stickMove)
 for(const event of ['pointerup','pointercancel','lostpointercapture'])joystick.addEventListener(event,e=>{
  if((e as PointerEvent).pointerId!==stick)return
  stick=undefined;world.joystick={x:0,y:0};knob.style.transform=''
+})
+document.addEventListener('visibilitychange',()=>{
+ if(document.hidden){stick=undefined;world.joystick={x:0,y:0};knob.style.transform=''}
 })
 if(import.meta.env.PROD&&'serviceWorker' in navigator){
  void navigator.serviceWorker.register(new URL('sw.js',document.baseURI)).catch(()=>{})

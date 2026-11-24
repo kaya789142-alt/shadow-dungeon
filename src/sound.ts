@@ -4,7 +4,8 @@ let previous=''
 let step=0
 let music=.3
 let effects=.65
-export function volume(m:number,s:number){music=m;effects=s}
+let ambience=.35
+export function volume(m:number,s:number,a=ambience){music=m;effects=s;ambience=a}
 export function unlock(){
  const Ctx=window.AudioContext??(window as Window & {webkitAudioContext?:typeof AudioContext}).webkitAudioContext
  if(!Ctx)return
@@ -24,7 +25,7 @@ function tone(frequency:number,duration:number,level:number,type:OscillatorType,
  osc.connect(gain).connect(context.destination)
  osc.start(at);osc.stop(at+duration+.03)
 }
-const effectsMap:Record<string,number[]>={hit:[155,90],magic:[335,512,710],death:[116,72],level:[262,330,392,523],loot:[523,659,784],forge:[176,262,523],fail:[180,110],heal:[329,440],walk:[65]}
+const effectsMap:Record<string,number[]>={hit:[155,90],arrow:[520,219,118],magic:[335,512,710],death:[116,72],level:[262,330,392,523],loot:[523,659,784],forge:[176,262,523],fail:[180,110],heal:[329,440],walk:[65]}
 export function sound(kind:string){
  effectsMap[kind]?.forEach((note,i)=>tone(note,.18,effects*.095,i?'triangle':'square',i*.085,kind==='hit'?.51:.91))
 }
@@ -38,6 +39,9 @@ export function soundtrack(theme:keyof typeof themes){
   const notes=themes[theme], note=notes[step++%notes.length]
   tone(note,1.1,music*.07,'triangle')
   if(step%4===1)tone(note/2,2.3,music*.07,'sine')
-  if(theme==='forest'&&step%8===3)tone(note*5,.16,music*.018,'sine',.18,1.15)
+  if(theme==='forest'&&step%8===3)tone(note*5,.26,ambience*.032,'sine',.18,1.15)
+  if(theme==='village'&&step%4===1)tone(367,.34,ambience*.018,'sine',.13,1.29)
+  if(theme==='dungeon'&&step%6===2)tone(63,2.4,ambience*.023,'sine',0,.86)
+  if(theme==='boss'&&step%4===2)tone(54,.46,ambience*.071,'triangle',0,.53)
  },theme==='boss'?340:600)
 }

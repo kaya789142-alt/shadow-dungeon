@@ -14,7 +14,8 @@ for(const file of files)signature.update(await readFile(new URL(file,output)))
 const worker=`
 const family='shadow-dungeon:'+self.registration.scope+':'
 const cacheName=family+${JSON.stringify(signature.digest('hex').slice(0,16))}
-const files=${JSON.stringify(files)}
+const files=${JSON.stringify(files.filter(path=>!path.startsWith('score/')))}
+const score=new URL('score/',self.registration.scope).href
 const shell=new URL('index.html',self.registration.scope).href
 
 self.addEventListener('install',event=>{
@@ -25,7 +26,7 @@ self.addEventListener('activate',event=>{
 })
 self.addEventListener('fetch',event=>{
  const {request}=event
- if(request.method!=='GET'||!request.url.startsWith(self.registration.scope))return
+ if(request.method!=='GET'||!request.url.startsWith(self.registration.scope)||request.url.startsWith(score))return
  if(request.mode==='navigate'){
   event.respondWith(caches.open(cacheName).then(cache=>cache.match(shell)).then(response=>response||fetch(request)))
  }else{

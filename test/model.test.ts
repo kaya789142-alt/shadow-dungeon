@@ -1,16 +1,21 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { jobs, monsters, quests, rules, zones } from '../src/data.ts'
-import { attributes, createHero, decodeSave, giveXp, makeGear, qualityRoll, record, rollover, upgrade, upgradeInfo } from '../src/model.ts'
+import { allMonsters, jobs, monsters, safeZone, zoneRoutes, quests, rules, zones } from '../src/data.ts'
+import { attributes, createHero, decodeSave, giveXp, makeGear, makeRelic, qualityRoll, record, rollover, upgrade, upgradeInfo } from '../src/model.ts'
 
-test('five classes and eight zones have data for combat, skills and quests',()=>{
+test('five classes, legacy IDs and the new expedition zones remain consistent',()=>{
  assert.equal(jobs.length,5)
  assert.ok(jobs.every(job=>job.skills.length===5))
- assert.equal(zones.length,8)
+ assert.equal(zones.length,13)
+ assert.equal(allMonsters.length,51)
+ assert.deepEqual(allMonsters.slice(0,35),monsters)
+ assert.equal(allMonsters[50].rank,'世界魔王')
+ assert.deepEqual(zoneRoutes(11),[10,12])
+ assert.equal(safeZone(8),true)
  assert.ok(monsters.length>=25)
  assert.equal(new Set(monsters.filter(m=>m.boss).map(m=>m.pattern)).size,5)
  assert.ok(quests.length>=20)
- assert.ok(quests.filter(q=>q.target!==undefined).every(q=>monsters[q.target!].zone===q.zone))
+ assert.ok(quests.filter(q=>q.target!==undefined).every(q=>allMonsters[q.target!].zone===q.zone))
 })
 test('level growth and cap preserve HP and distinct jobs',()=>{
  const mage=createHero('月蝕',2), knight=createHero('鐵壁',0)
@@ -80,4 +85,44 @@ test('click navigation plans a walk around an impassable wall',async()=>{
  assert.deepEqual(route.at(-1),goal)
  assert.ok(route.some(point=>point.y>143))
  assert.ok(route.every((point,i)=>clearPath(i===0?start:route[i-1],point,passable)))
+})
+
+test('V1 save loads with its original equipment, zone and progress and V2 defaults',()=>{
+ const original=createHero('延續者',3)
+ Object.assign(original,{level:30,zone:6,x:879,y:551,gold:734})
+ original.bag[0].plus=5
+ original.vault=[makeGear(8,3,29)]
+ original.explored[6]=[1,2,35]
+ original.quests.hunt5=2
+ original.skills=[5,4,3,2,1]
+ const {preferences:_,items:{blink:__,...items},...legacy}=original
+ const loaded=decodeSave(JSON.stringify({...legacy,items}))
+ assert.deepEqual(loaded,{...original,items:{...items,blink:0}})
+})
+test('new relics round-trip and identified gear contributes bounded leech',()=>{
+ const hero=createHero('灰港旅人',0)
+ hero.zone=12
+ hero.hidden=[12]
+ hero.chests=[9,11,12]
+ hero.worn[0]=makeRelic(0,5,50,0,4)
+ assert.equal(attributes(hero).leech,0)
+ hero.worn[0].identified=true
+ assert.equal(attributes(hero).leech,.07)
+ assert.deepEqual(decodeSave(JSON.stringify(hero)),hero)
+ hero.worn[0].element=12
+ assert.throws(()=>decodeSave(JSON.stringify(hero)))
+})
+
+test('V2.1 graphics presets respect DPR, backing-pixel budget and adaptive fallback',async()=>{
+ const {backingRatio}=await import('../src/display.ts')
+ assert.equal(backingRatio('balanced',3,1000,600),1)
+ assert.equal(backingRatio('high',2,1000,600),2)
+ assert.equal(backingRatio('ultra',3,800,600),2.5)
+ assert.ok(backingRatio('ultra',3,1200,900)**2*1200*900<=4_000_001)
+ assert.equal(backingRatio('ultra',3,1200,900,true),1)
+ const old=createHero('清晰',0)
+ const current=decodeSave(JSON.stringify({...old,preferences:{...old.preferences,detail:'ultra',size:1.35}}))
+ assert.equal(current.preferences.detail,'ultra')
+ assert.equal(current.preferences.size,1.35)
+ assert.equal(current.bag[0].uid,old.bag[0].uid)
 })

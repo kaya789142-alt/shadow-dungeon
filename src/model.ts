@@ -1,25 +1,31 @@
 import { achievements, jobs, materialNames, quests, rules, zones } from './data.ts'
+import type { Detail } from './display.ts'
 import type { Gear, Material } from './data.ts'
 
 export const spawn = {x:805,y:552}
 export const materials = Object.keys(materialNames) as Material[]
 export const day = () => new Intl.DateTimeFormat('sv-SE').format(new Date())
+export const defaultPreferences={size:1,detail:'high' as Detail,click:'move' as 'move'|'interact',shake:true,ambience:.35}
 export type Hero = ReturnType<typeof createHero>
 export function createHero(name:string, job:number) {
  return {
   version:1, name:name.trim().slice(0,16)||'無名旅人', job, level:1, xp:0, gold:180, hp:999, mp:999,
   zone:0, x:spawn.x, y:spawn.y, bag:[makeGear(0,0,1,job),makeGear(3,0,1)],
   worn:{} as Record<number,Gear>, vault:[] as Gear[],
-  items:{red:8,blue:6,weapon:3,armor:3,bless:0,protect:1,warp:1,home:2,morph:1,identify:2,book:2,shard:0} satisfies Record<Material,number>,
+  items:{red:8,blue:6,weapon:3,armor:3,bless:0,protect:1,warp:1,home:2,blink:2,morph:1,identify:2,book:2,shard:0} satisfies Record<Material,number>,
   skills:[1,0,0,0,0], quests:{move:0,potion:0,gear:0,forge:0,learn:0} as Record<string,number>,
   claims:{} as Record<string,boolean>, daily:day(), bestiary:{} as Record<number,number>,
   explored:{} as Record<number,number[]>, chests:[] as number[], hidden:[] as number[], morphs:[] as number[], stats:{} as Record<string,number>,
-  title:'', music:.3, sfx:.65, stock:{} as Record<string,number>, tracking:'move'
+  title:'', music:.3, sfx:.65, stock:{} as Record<string,number>, tracking:'move', preferences:{...defaultPreferences}
  }
 }
 export function makeGear(slot:number,grade:number,tier:number,job?:number,random=Math.random):Gear {
  return {uid:globalThis.crypto?.randomUUID?.()??(Date.now().toString(36)+Math.random().toString(36).slice(2)),slot,grade,tier,...(job===undefined?{}:{job}),plus:0,roll:1+Math.floor(random()*5),identified:grade<2}
 }
+export function makeRelic(slot:number,grade:number,tier:number,job:number,relic:number){
+ return {...makeGear(slot,grade,Math.min(50,tier),slot===0?job:undefined),relic,element:(relic+slot)%5,leech:slot===0||slot>=7?2+grade:0}
+}
+export const gearPower=(g:Gear)=>3+g.grade*4+g.tier*.8+g.plus*(2+g.tier*.09)+(g.identified?g.roll:0)
 export const expNeeded = (level:number) => 42+level*21
 export function giveXp(hero:Hero, amount:number){
  hero.xp += amount
@@ -36,10 +42,10 @@ export function attributes(hero:Hero){
  const job=jobs[hero.job]
  const [str,dex,int,con,spi]=job.stats.map((value,i)=>value+(hero.level-1)*job.growth[i])
  const gear=Object.values(hero.worn)
- const power=(g:Gear)=>3+g.grade*4+g.tier*.8+g.plus*(2+g.tier*.09)+(g.identified?g.roll:0)
- const weapon=gear.filter(g=>g.slot===0).reduce((total,g)=>total+power(g),0)
- const armor=gear.filter(g=>g.slot!==0).reduce((total,g)=>total+power(g),0)
+ const weapon=gear.filter(g=>g.slot===0).reduce((total,g)=>total+gearPower(g),0)
+ const armor=gear.filter(g=>g.slot!==0).reduce((total,g)=>total+gearPower(g),0)
  return { str,dex,int,con,spi,hp:75+con*8+armor*1.4,mp:30+spi*6,attack:9+str*2.2+dex*.55+weapon,magic:11+int*2.75+weapon,
+  leech:Math.min(.25,(hero.job===3?.065:0)+gear.reduce((total,g)=>total+(g.identified?(g.leech??0)/100:0),0)),
   defense:con*.55+armor*.48,hit:Math.min(.99,.86+dex*.0022),evade:Math.min(.32,dex*.005),crit:Math.min(.52,.05+dex*.005),interval:job.interval/(1+Math.min(.8,dex*.004)) }
 }
 export function qualityRoll(random:number, min=0){
@@ -76,8 +82,11 @@ export function rollover(hero:Hero){
  const today=day()
  if(hero.daily===today)return
  hero.daily=today
- delete hero.claims.daily
- delete hero.quests.daily
+ for(const quest of quests.filter(q=>q.daily)){
+  delete hero.claims[quest.id]
+  delete hero.quests[quest.id]
+ }
+ for(const key of Object.keys(hero.stats))if(key.startsWith('riftDay'))delete hero.stats[key]
  hero.stock={}
 }
 export function record(hero:Hero,event:string,amount=1,target?:number){
@@ -96,9 +105,10 @@ export function save(hero:Hero){localStorage.setItem(saveKey,JSON.stringify(hero
 const object = (value:unknown):value is Record<string,unknown> => typeof value==='object'&&value!==null&&!Array.isArray(value)
 const integer = (value:unknown,min:number,max:number):value is number => typeof value==='number'&&Number.isInteger(value)&&value>=min&&value<=max
 const finite = (value:unknown,min:number,max:number):value is number => typeof value==='number'&&Number.isFinite(value)&&value>=min&&value<=max
-const integerRecord = (value:unknown) => object(value)&&Object.values(value).every(v=>integer(v,0,1e9))
+const integerRecord = (value:unknown) => object(value)&&Object.values(value).every(v=>integer(v,0,Number.MAX_SAFE_INTEGER))
 function validGear(value:unknown):value is Gear {
- return object(value)&&typeof value.uid==='string'&&/^[a-z0-9-]{1,90}$/i.test(value.uid)&&integer(value.slot,0,8)&&integer(value.grade,0,5)&&integer(value.tier,1,50)&&integer(value.plus,0,15)&&integer(value.roll,1,5)&&typeof value.identified==='boolean'&&(value.slot!==0||integer(value.job,0,jobs.length-1))
+ return object(value)&&typeof value.uid==='string'&&/^[a-z0-9-]{1,90}$/i.test(value.uid)&&integer(value.slot,0,8)&&integer(value.grade,0,5)&&integer(value.tier,1,50)&&integer(value.plus,0,15)&&integer(value.roll,1,5)&&(value.element===undefined||integer(value.element,0,4))
+  &&(value.leech===undefined||integer(value.leech,0,12))&&(value.relic===undefined||integer(value.relic,0,4))&&typeof value.identified==='boolean'&&(value.slot!==0||integer(value.job,0,jobs.length-1))
 }
 export function decodeSave(json:string):Hero {
  const value:unknown=JSON.parse(json)
@@ -109,18 +119,27 @@ export function decodeSave(json:string):Hero {
   !Array.isArray(value.skills)||value.skills.length!==5||!value.skills.every(v=>integer(v,0,5))||
   !Array.isArray(value.bag)||!value.bag.every(validGear)||!Array.isArray(value.vault)||!value.vault.every(validGear)||
   !object(value.worn)||!Object.entries(value.worn).every(([slot,g])=>validGear(g)&&String(g.slot)===slot&&(g.slot!==0||g.job===value.job))||
-  !object(value.items)||!materials.every(k=>integer((value.items as Record<string,unknown>)[k],0,1e9))||
+  !object(value.items)||!materials.every(k=>k==='blink'&&(value.items as Record<string,unknown>)[k]===undefined||integer((value.items as Record<string,unknown>)[k],0,1e9))||
   !integerRecord(value.quests)||!integerRecord(value.bestiary)||!integerRecord(value.stats)||!integerRecord(value.stock)||
   !object(value.claims)||!Object.values(value.claims).every(v=>typeof v==='boolean')||
   !object(value.explored)||!Object.values(value.explored).every(v=>Array.isArray(v)&&v.every(i=>integer(i,0,99)))||
-  !Array.isArray(value.chests)||!value.chests.every(v=>integer(v,0,7))||
-  !Array.isArray(value.hidden)||!value.hidden.every(v=>integer(v,0,7))||
+  !Array.isArray(value.chests)||!value.chests.every(v=>integer(v,0,zones.length-1))||
+  !Array.isArray(value.hidden)||!value.hidden.every(v=>integer(v,0,zones.length-1))||
   !Array.isArray(value.morphs)||!value.morphs.every(v=>integer(v,0,5))||
   typeof value.daily!=='string'||typeof value.title!=='string'||typeof value.tracking!=='string')throw new Error('存檔格式或版本無效')
  const allGear=[...value.bag,...value.vault,...Object.values(value.worn)] as Gear[]
  if(new Set(allGear.map(g=>g.uid)).size!==allGear.length)throw new Error('存檔含重複的裝備')
  const hero=value as unknown as Hero
  hero.name=hero.name.slice(0,16)
+ hero.items.blink??=0
+ const prefs=object(value.preferences)?value.preferences:{}
+ hero.preferences={
+  size:finite(prefs.size,1,1.4)?prefs.size:defaultPreferences.size,
+  detail:prefs.detail==='balanced'||prefs.detail==='ultra'?prefs.detail:'high',
+  click:prefs.click==='interact'?'interact':'move',
+  ambience:finite(prefs.ambience,0,1)?prefs.ambience:defaultPreferences.ambience,
+  shake:typeof prefs.shake==='boolean'?prefs.shake:defaultPreferences.shake
+ }
  rollover(hero)
  return hero
 }

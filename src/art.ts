@@ -1,5 +1,8 @@
 import Phaser from 'phaser'
-import { zones } from './data'
+import { safeZone, zones } from './data'
+
+import { cobble, roofMaterial } from './terrain-material'
+import { drawAdventurer } from './actor-art'
 
 export const WIDTH=1500, HEIGHT=1024, TILE=32
 export type Obstacle={x:number;y:number;r:number}
@@ -107,14 +110,18 @@ function gate(g:Phaser.GameObjects.Graphics,x:number,y:number,c:number){
 }
 export function drawWorld(scene:Phaser.Scene,zone:number){
  const g=scene.add.graphics(), r=rng(540+zone*127), [, ,ground,dark,accent]=zones[zone], obstacles:Obstacle[]=[]
- const organic=zone===0||zone===1||zone===2
- const path=(x:number,y:number)=>Math.abs(y-535-Math.sin(x/165)*12)<(zone===0?52:32)
- const plaza=(x:number,y:number)=>zone===0&&x>486&&x<1110&&y>290&&y<727
+ const propsArt:{name:string;x:number;y:number;height:number;width?:number;mirror?:boolean}[]=[]
+ const cottages=['cottage-blue','cottage-green','cottage-red','cottage-blue','cottage-red']
+ const has=(name:string)=>scene.textures.exists(name)
+ const settlement=safeZone(zone)
+ const organic=settlement||zone===1||zone===2||zone===10
+ const path=(x:number,y:number)=>Math.abs(y-535-Math.sin(x/165)*12)<(settlement?52:32)
+ const plaza=(x:number,y:number)=>settlement&&x>486&&x<1110&&y>290&&y<727
  ink(g,dark,0,0,WIDTH,HEIGHT)
  for(let y=0;y<HEIGHT;y+=16)for(let x=0;x<WIDTH;x+=16){
   const u=r(), near=path(x,y), square=plaza(x,y)
   let tile=color(dark,ground,.3+u*.7)
-  if(near||square)tile=color(zone===0?0x3c3740:ground,zone===0?0x6b5660:0x9c755b,(near?.37:.13)+u*.2)
+  if(near||square)tile=color(settlement?0x3c3740:ground,settlement?0x6b5660:0x9c755b,(near?.37:.13)+u*.2)
   ink(g,tile,x,y,16,16)
   if(near||square){
    const shift=(y%32)/4
@@ -122,32 +129,55 @@ export function drawWorld(scene:Phaser.Scene,zone:number){
    ink(g,color(tile,0x201d2a,.35),x+shift,y,1,15,.54)
    if(u>.58)ink(g,color(tile,0xb2a6a0,.26),x+3+shift,y+2,7,1,.61)
   }else if(u>.28){
-   if(organic)grass(g,x+3+r()*10,y+3+r()*9,color(ground,zone===0?0x7b7162:0x80a969,.36),u)
+   if(organic)grass(g,x+3+r()*10,y+3+r()*9,color(ground,settlement?0x7b7162:0x80a969,.36),u)
    else{ink(g,color(ground,accent,.16),x+5,y+5,4,2,.6);ink(g,dark,x+8,y+7,5,2,.8)}
+  }
+ }
+ if(zone===10){
+  for(let x=128;x<1300;x+=5){
+   const y=239+Math.sin(x/149)*17
+   ink(g,0x182831,x,y-25,5,53)
+   ink(g,color(0x294c50,0x4d7270,r()*.63),x,y-19,5,39)
+   if(r()>.45)ink(g,0x7a9279,x,y+13-r()*26,5,2,.44)
   }
  }
  const props:{x:number;y:number;s:number}[]=[]
  for(let i=0;i<230;i++){
   const x=25+r()*(WIDTH-50),y=35+r()*(HEIGHT-55)
-  if(path(x,y)||plaza(x,y)||Math.hypot(x-refuge.x,y-refuge.y)<86||Math.hypot(x-chest.x,y-chest.y)<63||Math.hypot(x-secret.x,y-secret.y)<64||Math.hypot(x-1200,y-590)<105)continue
+  if(zone===10&&Math.abs(y-239-Math.sin(x/149)*17)<36||path(x,y)||plaza(x,y)||Math.hypot(x-refuge.x,y-refuge.y)<86||Math.hypot(x-chest.x,y-chest.y)<63||Math.hypot(x-secret.x,y-secret.y)<64||Math.hypot(x-1200,y-590)<105)continue
   if(props.some(p=>Math.hypot(p.x-x,p.y-y)<42))continue
   props.push({x,y,s:.55+r()*.64})
  }
  for(const {x,y,s} of props.sort((a,b)=>a.y-b.y)){
-  if(organic&&r()>.18)pine(g,x,y,s,color(zone===0?0x344744:0x344e44,ground,r()*.5),r)
+  if(organic&&r()>.18){
+   const shade=color(settlement?0x344744:0x344e44,ground,r()*.5)
+   if(has('spruce')){
+    propsArt.push({name:'spruce',x,y,height:94*s,width:75*s,mirror:x%2>1})
+    for(let i=0;i<40;i++)r()
+   }else pine(g,x,y,s,shade,r)
+  }
   else if(zone===3){
    oval(g,0x171a24,x,y+1,38*s,13*s,.5)
    ink(g,0x38394a,x-10*s,y-26*s,20*s,30*s);ink(g,0x626276,x-8*s,y-29*s,15*s,25*s)
    ink(g,0x353244,x-4*s,y-19*s,7*s,2*s);ink(g,0x353244,x-1*s,y-22*s,2*s,10*s)
-  }else stone(g,x,y,s,color(ground,accent,.22))
+  }else if(has('boulder'))propsArt.push({name:'boulder',x,y,height:36*s,width:45*s,mirror:x%2>1})
+  else stone(g,x,y,s,color(ground,accent,.22))
   obstacles.push({x,y:y-5,r:12*s})
  }
- if(zone===0){
-  for(const [x,y,c] of [[568,424,0x514653],[752,401,0x53465d],[944,420,0x61434b],[1054,648,0x574254],[519,650,0x55424d]]){
-   house(g,x,y,c,r);obstacles.push({x,y:y-24,r:37})
+ if(settlement){
+  const houses=[[568,424,0x514653],[752,401,0x53465d],[944,420,0x61434b],[1054,648,0x574254],[519,650,0x55424d]]
+  for(const [index,[x,y,c]] of houses.entries()){
+   const name=cottages[index]
+   if(has(name))propsArt.push({name,x,y,height:144,width:155,mirror:index===2||index===4})
+   else house(g,x,y,c,r)
+   obstacles.push({x,y:y-24,r:37})
   }
   fountain(g,774,510);obstacles.push({x:774,y:501,r:35})
   for(const [x,y] of [[475,487],[1120,487],[508,583],[1063,560],[638,480],[912,480],[631,606],[911,606]])torch(g,x,y)
+  for(const [x,y] of [[567,384],[755,353],[943,372],[520,611],[1054,600]]){
+   for(let i=0;i<4;i++)ink(g,0x1b1c24,x-60+i*4,y+10+i*4,12,2,.6)
+   ink(g,0xa48562,x+26,y+10,12,15,.77);ink(g,0x695047,x+28,y+11,8,14)
+  }
   for(let i=0;i<10;i++){
    const x=559+i*46
    ink(g,0x1c2029,x,700,35,6);ink(g,0x625762,x,696,33,5);ink(g,0x4b414d,x+2,701,7,7)
@@ -164,6 +194,16 @@ export function drawWorld(scene:Phaser.Scene,zone:number){
     polygon(g,0x7e4d45,[[x-32,y-2],[x,y-57],[x+30,y-2],[x,y+4]])
     polygon(g,0x482d31,[[x,y-57],[x+30,y-2],[x,y+4]])
     ink(g,0xe6a373,x-1,y-60,2,63);obstacles.push({x,y:y-8,r:19})
+   }
+  }
+  if(zone===9||zone>=11){
+   for(const [x,y] of [[551,461],[723,457],[1037,457],[1251,464],[604,624],[822,641],[1001,625]]){
+    oval(g,0x151724,x+11,y+4,68,20,.68)
+    ink(g,0x25252e,x-15,y-77,32,79);ink(g,0x64737a,x-12,y-70,24,66)
+    ink(g,0x99a7a3,x-11,y-69,5,62);ink(g,0x454954,x+4,y-68,7,63)
+    for(let i=0;i<6;i++)ink(g,0x353a48,x-12,y-64+i*10,23,2,.74)
+    ink(g,0x92958f,x-18,y-72,36,7);ink(g,0x52555c,x-19,y-5,38,9)
+    obstacles.push({x,y:y-5,r:18})
    }
   }
   if(zone>=4){
@@ -186,14 +226,56 @@ export function drawWorld(scene:Phaser.Scene,zone:number){
   oval(g,accent,refuge.x,refuge.y,102,61,.12)
   g.lineStyle(1,accent,.56).strokeEllipse(refuge.x,refuge.y,86,53)
   gate(g,secret.x,secret.y,accent)
+  if(has('arch'))propsArt.push({name:'arch',...secret,height:97,width:85})
  }
  gate(g,entry.x,entry.y,0x76b1c2);gate(g,exit.x,exit.y,accent)
- g.generateTexture('map-'+zone,WIDTH,HEIGHT)
+ if(has('arch'))for(const point of [entry,exit])propsArt.push({name:'arch',...point,height:97,width:85})
+ const key='map-'+zone
+ const texture=scene.textures.createCanvas(key,WIDTH*2,HEIGHT*2)!
+ g.setScale(2).generateTexture(key,WIDTH*2,HEIGHT*2)
  g.destroy()
- const world=scene.add.image(0,0,'map-'+zone).setOrigin(0).setDepth(-2)
+ const c=texture.getContext(), detail=rng(1996+zone*61)
+ c.save();c.scale(2,2)
+ // Overlay brush detail on the baked geometry; simulation, obstacles and portals remain in logical coordinates.
+ for(let i=0;i<10_000;i++){
+  const x=detail()*WIDTH,y=detail()*HEIGHT
+  if(!path(x,y)&&!plaza(x,y)){
+   c.fillStyle=detail()>.56?'#bfc5a51d':'#0e191724'
+   c.fillRect(x,y,1+detail()*2,.6+detail()*1.4)
+  }
+ }
+ c.globalAlpha=.58
+ for(let y=473;y<599;y+=9)for(let x=-10+(Math.floor(y/9)%2)*12;x<WIDTH;x+=24){
+  if(!path(x+12,y+4)||settlement&&x>480&&x<1120||x<177||x>1337)continue
+  cobble(c,x+detail()*2-1,y+detail()*1.7-1,21+detail()*3,8,.72,detail)
+ }
+ if(settlement){
+  for(let y=458;y<599;y+=8)for(let x=475+(Math.floor(y/8)%2)*11;x<1120;x+=23){
+   if(Math.hypot(x-774,y-501)<56||[[475,487],[638,480],[912,480],[1120,487],[508,583],[1063,560]].some(([tx,ty])=>Math.hypot(x-tx,y-ty)<17))continue
+   cobble(c,x+detail()*2-1,y+detail()*1.4-1,21+detail()*2,7.5,.76,detail)
+  }
+  if(!has(cottages[0]))for(const [x,y] of [[568,424],[752,401],[944,420],[1054,648],[519,650]])roofMaterial(c,x,y,detail)
+ }
+ c.globalAlpha=1
+ c.imageSmoothingEnabled=true;c.imageSmoothingQuality='high'
+ for(const prop of propsArt.sort((a,b)=>a.y-b.y)){
+  const source=scene.textures.get(prop.name).getSourceImage()
+  if(!(source instanceof HTMLImageElement))continue
+  const width=prop.width??prop.height*source.width/source.height
+  c.save();c.translate(prop.x,prop.y)
+  const shadow=c.createRadialGradient(3,2,0,3,2,width*.42)
+  shadow.addColorStop(0,'#080b0e80');shadow.addColorStop(1,'#080b0e00')
+  c.save();c.scale(1,.31);c.fillStyle=shadow;c.fillRect(-width*.6,-width*.44,width*1.2,width);c.restore()
+  if(prop.mirror)c.scale(-1,1)
+  c.drawImage(source,-width*.5,-prop.height,width,prop.height)
+  c.restore()
+ }
+ c.restore()
+ texture.refresh()
+ const world=scene.add.image(0,0,key).setOrigin(0).setDisplaySize(WIDTH,HEIGHT).setDepth(-2)
  return {world,obstacles}
 }
-export type Pose='idle'|'walk'|'attack'|'cast'|'hurt'|'dead'
+export type Pose='idle'|'walk'|'run'|'attack'|'cast'|'hurt'|'dead'
 const variants=[
  ['..bb....bb..','...b....b...','...bbbbbb...','..bbbbbbbb..','..bwbbbbwb..','..bbbbbbbb..','...bddddb...','....dddd....'],
  ['....bbbb....','...bbbbbb...','..bbbbbbbb..','..bwbwbwbb..','..bbbbbbbb..','..bdbdddbb..','..dddddddd..','...d.d.dd...'],
@@ -204,11 +286,14 @@ const variants=[
 ]
 export function sprite(g:Phaser.GameObjects.Graphics,x:number,y:number,c:number,kind:number,pose:Pose,frame:number,facing:number,big=false,transformed=false){
  const s=big?4:2.5, phase=frame%2===0?1:-1
- const bob=pose==='walk'?phase:pose==='idle'&&frame%3===0?-1:0
+ const bob=pose==='walk'||pose==='run'?phase*2:pose==='attack'?-4:pose==='cast'?-3:pose==='hurt'?2:Math.sin(frame*.6)
+ const thrust=pose==='attack'?facing*7:pose==='hurt'?-facing*3:0
  const body=pose==='hurt'?0xffb0a5:c, shadow=color(body,0x151523,.57), highlight=color(body,0xffe6c1,.43)
  oval(g,0x11141b,x,y+2,big?57:32,big?20:12,.65)
+ if(kind<5&&!transformed){drawAdventurer(g,x,y,c,kind,pose,frame,facing);return}
  if(pose==='dead'){ink(g,shadow,x-12,y-4,25,5);ink(g,body,x-9,y-8,18,4);return}
  y+=bob
+ x+=thrust
  const left=x-6*s, top=y-16*s
  if(kind>=5||transformed){
   const glyph=variants[transformed?kind-6:kind%variants.length]
@@ -220,32 +305,17 @@ export function sprite(g:Phaser.GameObjects.Graphics,x:number,y:number,c:number,
    ink(g,body,x-6*s,y-2*s+phase,3*s,2*s);ink(g,body,x+3*s,y-2*s-phase,3*s,2*s)
   }
   ink(g,highlight,x-3*s,y-10*s,4*s,1*s,.8)
+  for(let i=0;i<4;i++){
+   const side=i%2?1:-1, dx=x+side*(4+i%3)*s
+   g.lineStyle(1,highlight,.6).lineBetween(dx,y-(4+i)*s,dx+side*4,y-(6+i)*s)
+  }
+  if(pose==='cast')oval(g,highlight,x,y-19*s,18,7,.53)
+  if(big){
+   polygon(g,shadow,[[x-14,y-33],[x-32,y-59],[x-41,y-48],[x-51,y-52],[x-36,y-28],[x-19,y-19]])
+   polygon(g,shadow,[[x+14,y-33],[x+32,y-59],[x+41,y-48],[x+51,y-52],[x+36,y-28],[x+19,y-19]])
+   g.lineStyle(1,highlight,.65).lineBetween(x-15,y-30,x-35,y-55).lineBetween(x+15,y-30,x+35,y-55)
+   oval(g,0xffcd90,x-8,y-31,4,2);oval(g,0xffcd90,x+8,y-31,4,2)
+  }
   return
  }
- const skin=0xe8ae87, dark=0x231d2a
- ink(g,dark,x-4*s,y-15*s,8*s,7*s)
- ink(g,shadow,x-5*s,y-9*s,10*s,7*s)
- ink(g,body,x-4*s,y-10*s,8*s,7*s)
- ink(g,highlight,x-4*s,y-10*s,7*s,s)
- ink(g,dark,x-4*s,y-4*s,8*s,s)
- for(const side of [-1,1]){
-  const shift=pose==='walk'?phase*side*2:0
-  ink(g,shadow,x+side*3*s-s,y-3*s,2*s,3*s+shift)
-  ink(g,dark,x+side*3*s-s,y-s+shift,3*s,2*s)
- }
- ink(g,skin,x-3*s,y-14*s,6*s,5*s)
- ink(g,shadow,x-4*s,y-15*s,8*s,2*s)
- ink(g,body,x-3*s,y-16*s,6*s,2*s)
- ink(g,highlight,x-2*s,y-16*s,3*s,s)
- ink(g,dark,x+facing*2*s,y-12*s,s,s)
- if(kind===1||kind===2||kind===3){
-  ink(g,shadow,x-5*s,y-13*s,2*s,8*s)
-  ink(g,body,x-5*s,y-8*s,2*s,6*s)
- }
- const wx=x+facing*(pose==='attack'?9:6)*s, wy=y-(pose==='cast'?13:8)*s
- ink(g,skin,wx-s,wy,2*s,2*s)
- if(kind===1){g.lineStyle(2,highlight).strokeEllipse(wx,wy-s,4*s,9*s)}
- else if(kind===2){ink(g,shadow,wx,wy-5*s,s,11*s);ink(g,highlight,wx-s,wy-6*s,3*s,3*s)}
- else{ink(g,highlight,wx,wy-6*s,2*s,6*s);ink(g,shadow,wx-s,wy-s,4*s,s)}
- if(kind===0||kind===4){ink(g,shadow,x-facing*6*s-s,y-9*s,4*s,6*s);ink(g,highlight,x-facing*6*s,y-8*s,2*s,4*s)}
 }

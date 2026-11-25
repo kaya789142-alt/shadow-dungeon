@@ -14,8 +14,10 @@ import './v21.css'
 import './v22.css'
 import './v30.css'
 import './v31.css'
-import { bagLimit, categories, categoryNames, compatibleGear, fullBag, gearCategory, gearLocked, itemCategory, jobRequirement, materialLocked, sortBag } from './inventory'
-import type { Category } from './inventory'
+import './v32.css'
+import { equipmentLayers } from './equipment-appearance'
+import { addItem, bagCategories, bagGearCategory, bagItemCategory, bagLimit, canSellGear, canSellItem, categories, categoryNames, compatibleGear, fullBag, gearLocked, gearSalePrice, jobRequirement, materialLocked, quoteGearSale, sellQuotedGear, sortBag } from './inventory'
+import type { BagCategory, Category } from './inventory'
 import { directions, edgePoint, nextDirection, regionNeighbor } from './overworld'
 import { release, releaseDate, trackRelease, versionLabel } from './release'
 
@@ -77,7 +79,14 @@ let hero=storedHero??createHero('無名旅人',0)
 let hasSave=!!storedHero
 let panel=''
 let panelMode:'open'|'collapsed'|'minimized'='open'
-let bagTab:'all'|Category='all'
+let bagTab:'all'|BagCategory='all'
+const sortLabels={slot:'部位',quality:'品質',level:'等級',price:'售價',recent:'取得時間'} as const
+let bagSort:keyof typeof sortLabels='slot'
+let shopTab:'buy'|'sell'='buy'
+let saleQuality=0
+const saleSelection=new Set<string>()
+let saleDraft:{ids:string[];total:number;rare:boolean;second:boolean}|undefined
+let itemSaleDraft:{item:Material;count:number}|undefined
 let saleSlot='all'
 let selectedSlot=0
 let jobIndex=0
@@ -217,13 +226,15 @@ const empty=(text:string)=>`<p class="empty">${text}</p>`
 const badge=(text:string)=>`<span class="badge">${text}</span>`
 const group=(title:string,body:string)=>`<section class="panel-group"><h3>${title}</h3>${body}</section>`
 const itemIcon=(cell:number)=>`<i aria-hidden="true" class="item-art" style="--atlas-x:${cell%4*100/3}%;--atlas-y:${Math.floor(cell/4)*50}%"></i>`
+const gearIcon=(slot:number)=>slot===9?`<i aria-hidden="true" class="item-art belt-icon">${icon('belt',22)}</i>`:itemIcon(slot)
+const slotLabel=(slot:number)=>slot===0?'主武器':slot===1?'副手':slots[slot]
 const iconCell=(m:Material)=>m==='red'?9:m==='blue'?10:11
-const gearLabel=(g:Gear)=>`<span class="gear-label" style="color:${qualityColors[g.grade]}">${itemIcon(g.slot)}<span>${gearName(g)}</span></span>`
+const gearLabel=(g:Gear)=>`<span class="gear-label" style="color:${qualityColors[g.grade]}">${gearIcon(g.slot)}<span>${gearName(g)}</span></span>`
 const gearStats=(g:Gear)=>[g.element!==undefined?elements[g.element]:'',g.leech?'吸血 '+g.leech+'%':''].filter(Boolean).join(' · ')
 const gearDetail=(g:Gear)=>`${quality[g.grade]} · 階級 ${g.tier} · ${jobRequirement(g)} · 穿戴等級不限 · ${g.slot===0?'攻擊 +'+gearPower(g).toFixed(1):'防禦 +'+(gearPower(g)*.48).toFixed(1)}${g.identified?' · 附加屬性 +'+g.roll+(gearStats(g)?' · '+gearStats(g):''):' · 待鑑定'}`
 const materialPrice:Record<Material,number>={red:14,blue:16,weapon:33,armor:26,bless:180,protect:140,warp:34,home:25,blink:38,morph:65,identify:31,book:62,shard:10}
 const shopMaterials:Partial<Record<number,Material[]>>={2:['red','blue'],3:['weapon','armor','warp','home','blink','morph','identify'],8:['bless','protect','book','morph'],9:['book']}
-const shopSlots:Partial<Record<number,number[]>>={0:[0],1:[1,2,3,4,5,6,7,8],8:[0,6,7,8]}
+const shopSlots:Partial<Record<number,number[]>>={0:[0],1:[1,2,3,4,5,6,7,8,9],8:[0,6,7,8]}
 const stock=(id:string,limit:number)=>Math.max(0,limit-(hero.stock[id]??0))
 const gradeToday=()=>2+new Date().getDate()%3
 const available=(g:Gear)=>hero.bag.find(item=>item.uid===g.uid)||hero.worn[g.slot]
@@ -233,11 +244,12 @@ function openPanel(next:string){
  if(titleState!=='play')return
  if(!panel)previousFocus=document.activeElement as HTMLElement
  panel=next;panelMode='open';world.blocked=true;chosenGear='';compareGear='';confirmRisk=false
+ saleDraft=undefined;itemSaleDraft=undefined;saleSelection.clear();shopTab='buy'
  renderPanel()
 }
 function closePanel(){
  if(panel==='death')return
- panel='';panelMode='open';world.blocked=false;renderPanel();previousFocus?.focus()
+ panel='';panelMode='open';world.blocked=false;saleDraft=undefined;itemSaleDraft=undefined;saleSelection.clear();renderPanel();previousFocus?.focus()
 }
 function openNpc(index:number){
  if(index===4)openPanel('forge')
@@ -312,15 +324,15 @@ function renderBody(){
  const village=safeZone(hero.zone)
  switch(panel){
   case 'bag':{
-   const tabs=(['all',...categories] as const).map(tab=>button('bag-tab:'+tab,tab==='all'?'全部':categoryNames[tab],bagTab===tab?'primary':'')).join('')
-   const gearRows=hero.bag.filter(g=>bagTab==='all'||gearCategory(g)===bagTab).map(g=>row(gearLabel(g),gearDetail(g),
+   const tabs=(['all',...Object.keys(bagCategories)] as ('all'|BagCategory)[]).map(tab=>button('bag-tab:'+tab,tab==='all'?'全部':bagCategories[tab],bagTab===tab?'primary':'')).join('')
+   const gearRows=orderedGear().filter(g=>bagTab==='all'||bagGearCategory(g)===bagTab).map(g=>row(gearLabel(g),gearDetail(g),
     (compatibleGear(hero,g)?button('equip:'+g.uid,'穿戴'):'')+button('compare:'+g.uid,'比較')+
     (g.identified?'':button('identify:'+g.uid,'鑑定'))+button('lock:'+g.uid,gearLocked(hero,g)?'解除鎖定':'鎖定'))).join('')
-   const itemRows=materials.filter(m=>hero.items[m]>0&&(bagTab==='all'||itemCategory(m)===bagTab)).map(m=>row(
+   const itemRows=orderedItems().filter(m=>hero.items[m]>0&&(bagTab==='all'||bagItemCategory(m)===bagTab)).map(m=>row(
     '<span class="gear-label">'+itemIcon(iconCell(m))+materialNames[m]+'</span>','持有 × '+hero.items[m],
     (['red','blue','home','warp','blink','morph'].includes(m)?button(m==='home'?'home-item':m,'使用'):'')+
     button('lock:'+m,materialLocked(hero,m)?'解除鎖定':'鎖定'))).join('')
-   return `<div class="bag-summary"><b>裝備槽 ${hero.bag.length}/${bagLimit}</b>${button('sort-bag','自動排序')}</div><div class="tabs bag-tabs">${tabs}</div>`+
+   return `<div class="bag-summary"><b>裝備槽 ${hero.bag.length}/${bagLimit}</b>${button('sort-bag','自動排序')}</div><label class="sale-filter">排序方式 <select id="bag-sort">${Object.entries(sortLabels).map(([id,label])=>`<option value="${id}" ${bagSort===id?'selected':''}>${label}</option>`).join('')}</select></label><div class="tabs bag-tabs">${tabs}</div>`+
     (compareGear?renderComparison(hero.bag.find(g=>g.uid===compareGear)):'')+
     (gearRows?group('裝備',gearRows):'')+(itemRows?group('道具堆疊',itemRows):'')+
     (!gearRows&&!itemRows?empty('此分類沒有道具。'):'')
@@ -345,17 +357,25 @@ function renderBody(){
   }).join(''))+empty('持有技能書 '+hero.items.book+' 本')+(village?button('books','向導師購買技能書'):'')
   case 'shop':{
    if(!village)return empty('商人位於燼燈村。')+button('home-scroll','使用回城卷軸')
+   const mode='<div class="tabs">'+button('shop-tab:buy','購買分頁',shopTab==='buy'?'primary':'')+button('shop-tab:sell','出售分頁',shopTab==='sell'?'primary':'')+'</div>'
+   if(shopTab==='sell'&&itemSaleDraft){
+    const {item,count}=itemSaleDraft
+    return mode+group('確認出售道具',`<p role="status">出售 ${count} 件${materialNames[item]}，可獲得 ${materialSale(item)*count} 金幣。</p>`+
+     button('sale-item-cancel','取消')+button('sale-item-confirm','確認出售','primary'))
+   }
+   if(shopTab==='sell'&&saleDraft)return mode+group('確認出售裝備',equipmentSales())
+   if(shopTab==='sell')return mode+group('出售裝備',equipmentSales())+
+    group('出售道具',materials.filter(m=>hero.items[m]>0).map(m=>row(materialNames[m],materialSale(m)+' 金幣／件 · 持有 '+hero.items[m],
+     !canSellItem(hero,m)?badge(materialLocked(hero,m)?'已鎖定':'任務道具'):
+      `<input aria-label="${materialNames[m]}出售數量" type="number" min="1" max="${hero.items[m]}" value="1">`+button('sell-material:'+m,'出售'))).join('')||empty('沒有可出售的道具。'))
    const tabs=[0,1,2,3,8,9].map(n=>button('shop:'+n,vendors[n],n===activeShop?'primary':'')).join('')
    const limit=activeShop===8?3:25
    const grade=activeShop===8?gradeToday():1
    const material=shopMaterials[activeShop]??[]
    const goods=shopSlots[activeShop]??[]
-   return `<div class="tabs">${tabs}</div>`+group('商店庫存',material.map(m=>row(materialNames[m],materialPrice[m]+' 金幣 · 庫存 '+stock(m,limit),
+   return mode+`<div class="tabs">${tabs}</div>`+group('商店庫存',material.map(m=>row(materialNames[m],materialPrice[m]+' 金幣 · 庫存 '+stock(m,limit),
     `<input aria-label="${materialNames[m]}購買數量" type="number" min="1" max="${Math.max(1,stock(m,limit))}" value="1">`+button('buy:'+m,'購買'))).join('')+
-    goods.map(s=>row(gearLabel(shopGear(s,grade)),(45+grade*75)+' 金幣 · 庫存 '+stock(activeShop+':'+s,limit),button('purchase:'+s,'購買'))).join(''))+
-   group('出售裝備',equipmentSales())+
-   group('出售道具',materials.filter(m=>hero.items[m]>0).map(m=>row(materialNames[m],materialSale(m)+' 金幣／件 · 持有 '+hero.items[m],
-     materialLocked(hero,m)?badge('已鎖定'):`<input aria-label="${materialNames[m]}出售數量" type="number" min="1" max="${hero.items[m]}" value="1">`+button('sell-material:'+m,'出售'))).join('')||empty('沒有可出售的道具。'))
+    goods.map(s=>row(gearLabel(shopGear(s,grade)),(45+grade*75)+' 金幣 · 庫存 '+stock(activeShop+':'+s,limit),button('purchase:'+s,'購買'))).join(''))
   }
   case 'forge':{
    if(!village)return empty('請返回燼燈村找強化師。')
@@ -402,41 +422,79 @@ function help(){
 function renderComparison(gear?:Gear){
  if(!gear)return ''
  const current=hero.worn[gear.slot]
- const before=attributes(hero), after=attributes({...hero,worn:{...hero.worn,[gear.slot]:gear}})
+ const eligible=compatibleGear(hero,gear)
+ const before=attributes(hero), after=eligible?attributes({...hero,worn:{...hero.worn,[gear.slot]:gear}}):before
  const card=(item?:Gear)=>item?'<strong>'+gearLabel(item)+'</strong><p>'+gearDetail(item)+'</p>':'空欄位'
- const stats=[['物理攻擊',after.attack-before.attack],['魔法攻擊',after.magic-before.magic],['防禦',after.defense-before.defense],
+ const stats=[['戰力指標',combatScore(after)-combatScore(before)],['物理攻擊',after.attack-before.attack],['魔法攻擊',after.magic-before.magic],['防禦',after.defense-before.defense],
   ['生命上限',after.hp-before.hp],['魔力上限',after.mp-before.mp],['吸血（百分點）',(after.leech-before.leech)*100]] as const
- return group('比較'+slots[gear.slot],`<div class="comparison"><div><h4>目前裝備</h4>${card(current)}</div><div><h4>背包裝備</h4>${card(gear)}</div></div>
- <div class="stat-grid">${stats.map(([name,value])=>`<div><span>${name}</span><b class="${value<0?'warning':'advantage'}">${value>0?'+':''}${value.toFixed(1)}</b></div>`).join('')}</div>`)
+ return group('比較'+slotLabel(gear.slot),`<div class="comparison"><div><h4>目前裝備</h4>${card(current)}</div><div><h4>背包裝備</h4>${card(gear)}</div></div>
+ <div class="stat-grid">${eligible?stats.map(([name,value])=>`<div><span>${name}</span><b class="${value<0?'warning':'advantage'}">${value>0?'+':''}${value.toFixed(1)}</b></div>`).join(''):empty('此裝備不符合職業限制。')}</div>`)
 
+}
+function combatScore(stats:ReturnType<typeof attributes>){
+ return Math.round(Math.max(stats.attack,stats.magic)+stats.defense+stats.hp*.15+stats.mp*.1+stats.leech*100)
+}
+function orderedGear(){
+ const bag=[...hero.bag]
+ if(bagSort==='quality')return bag.sort((a,b)=>b.grade-a.grade||b.plus-a.plus)
+ if(bagSort==='level')return bag.sort((a,b)=>b.tier-a.tier)
+ if(bagSort==='price')return bag.sort((a,b)=>gearSalePrice(b)-gearSalePrice(a))
+ if(bagSort==='recent')return bag.sort((a,b)=>(b.acquiredAt??0)-(a.acquiredAt??0))
+ return bag
+}
+function orderedItems(){
+ if(bagSort==='price')return [...materials].sort((a,b)=>materialSale(b)-materialSale(a))
+ if(bagSort==='recent')return [...materials].sort((a,b)=>(hero.itemAcquiredAt[b]??0)-(hero.itemAcquiredAt[a]??0))
+ return materials
 }
 function paperDoll(){
  const slotCard=(index:number)=>{
-  const gear=hero.worn[index], name=slots[index]
-  return `<button type="button" class="doll-slot" data-action="doll-slot:${index}" aria-pressed="${selectedSlot===index}" aria-label="${name}：${gear?escape(gearName(gear)):'未裝備'}">
-   ${gear?itemIcon(index):'<span class="doll-empty" aria-hidden="true">＋</span>'}
+  const gear=hero.worn[index], name=slotLabel(index)
+  return `<button type="button" class="doll-slot" style="--slot-ink:${gear?qualityColors[gear.grade]:'#e7cfab'}" data-action="doll-slot:${index}" aria-pressed="${selectedSlot===index}" aria-label="${name}：${gear?escape(gearName(gear)):'未裝備'}">
+   ${gear?gearIcon(index):'<span class="doll-empty" aria-hidden="true">＋</span>'}
    <span>${name}${gear?.plus?' +'+gear.plus:''}</span></button>`
  }
  const gear=hero.worn[selectedSlot], job=jobs[hero.job], stats=attributes(hero)
- return `<div class="doll"><div class="doll-slots">${[2,3,4,5,6].map(slotCard).join('')}</div>
-  <div class="doll-portrait"><img src="${playerArt(hero.job)}" alt=""><span>${escape(hero.name)} · ${job.name}</span></div>
-  <div class="doll-slots">${[0,1,7,8].map(slotCard).join('')}</div></div>
-  <div class="doll-stats">物攻 ${Math.round(stats.attack)} · 魔攻 ${Math.round(stats.magic)} · 防禦 ${Math.round(stats.defense)}</div>`+
-  group(slots[selectedSlot],gear?row(gearLabel(gear),gearDetail(gear),button('unequip:'+selectedSlot,'卸除')):empty('此部位尚未裝備。'))
+ return `<div class="doll-stats">戰力指標 ${combatScore(stats)} · 物攻 ${Math.round(stats.attack)} · 魔攻 ${Math.round(stats.magic)} · 防禦 ${Math.round(stats.defense)}</div>
+  <div class="doll"><div class="doll-slots">${[2,3,4,9,5].map(slotCard).join('')}</div>
+  <div class="doll-portrait"><div class="doll-figure"><img src="${playerArt(hero.job)}" alt="">${equipmentLayers(hero.job,hero.worn)}</div><span>${escape(hero.name)} · ${job.name}</span></div>
+  <div class="doll-slots">${[0,1,6,7,8].map(slotCard).join('')}</div></div>`+
+  group(slotLabel(selectedSlot),gear?row(gearLabel(gear),gearDetail(gear),button('unequip:'+selectedSlot,'卸除')+button('lock:'+gear.uid,gearLocked(hero,gear)?'解除鎖定':'鎖定')):empty('此部位尚未裝備。'))+
+  (compareGear?renderComparison(hero.bag.find(g=>g.uid===compareGear)):'')+
+  group('背包替換裝備',orderedGear().filter(g=>g.slot===selectedSlot).map(g=>row(gearLabel(g),gearDetail(g),
+   button('compare:'+g.uid,'比較')+(compatibleGear(hero,g)?button('equip:'+g.uid,'穿戴'):badge('職業不符')))).join('')||empty('背包沒有此部位的裝備。'))
 }
 function equipmentSales(){
- const counts=slots.map((_,slot)=>hero.bag.filter(gear=>gear.slot===slot&&!gearLocked(hero,gear)).length)
- const options=slots.map((name,index)=>`<option value="${index}" ${saleSlot===String(index)?'selected':''}>${name}（${counts[index]}）</option>`).join('')
+ if(saleDraft){
+  const draft=saleDraft,quote=quoteGearSale(hero,draft.ids)
+  return `<p role="status">出售 ${draft.ids.length} 件裝備，可獲得 ${draft.total} 金幣。</p>`+
+   quote.gear.map(gear=>row(gearLabel(gear),gearSalePrice(gear)+' 金幣')).join('')+
+   (draft.rare?'<p class="warning">包含稀有以上裝備，售出後無法取回。</p>':'')+
+   button('sale-cancel','取消')+button('sale-confirm',draft.second?'再次確認出售':'確認出售','primary')
+ }
+ const counts=slots.map((_,slot)=>hero.bag.filter(gear=>gear.slot===slot&&canSellGear(hero,gear)).length)
+ const options=slots.map((_,index)=>`<option value="${index}" ${saleSlot===String(index)?'selected':''}>${slotLabel(index)}（${counts[index]}）</option>`).join('')
  const rows=hero.bag.filter(gear=>saleSlot==='all'||String(gear.slot)===saleSlot).map(gear=>
-  row(gearLabel(gear),slots[gear.slot]+' · '+sellPrice(gear)+' 金幣',gearLocked(hero,gear)?badge('已鎖定'):button('sell:'+gear.uid,'出售'))).join('')
- return `<label class="sale-filter">裝備分類 <select id="sale-slot"><option value="all" ${saleSlot==='all'?'selected':''}>全部（${counts.reduce((sum,count)=>sum+count,0)}）</option>${options}</select></label>`+
+  row(gearLabel(gear),slotLabel(gear.slot)+' · '+gearSalePrice(gear)+' 金幣',canSellGear(hero,gear)?
+   `<label class="sale-check"><input type="checkbox" data-sale-id="${gear.uid}" ${saleSelection.has(gear.uid)?'checked':''}>選取</label>`+button('sell:'+gear.uid,'出售'):
+   badge(gearLocked(hero,gear)?'已鎖定':'已穿戴'))).join('')
+ const selected=quoteGearSale(hero,saleSelection)
+ return `<label class="sale-filter">裝備分類 <select id="sale-slot"><option value="all" ${saleSlot==='all'?'selected':''}>全部（${counts.reduce((sum,count)=>sum+count,0)}）</option>${options}</select></label>
+  <div class="sale-toolbar"><label class="sale-filter">整批品質 <select id="sale-quality">${quality.map((name,index)=>`<option value="${index}" ${saleQuality===index?'selected':''}>${name}</option>`).join('')}</select></label>
+  ${button('sale-grade','出售此品質')}${button('sale-selected','出售所選')}${button('sale-clear','清除選取')}</div>
+  <p class="sale-summary" aria-live="polite">已選 ${selected.gear.length} 件，可獲得 ${selected.total} 金幣</p>`+
   (rows||empty('此分類沒有背包装備。'))
+}
+function previewSale(ids:Iterable<string>){
+ const quote=quoteGearSale(hero,ids)
+ if(!quote.gear.length){message('沒有符合條件的可出售裝備','warn');return}
+ saleDraft={ids:quote.gear.map(gear=>gear.uid),total:quote.total,rare:quote.rare,second:false}
+ renderPanel()
 }
 function shopGear(slot:number,grade:number){
  return hero.zone===8&&activeShop===8?makeRelic(slot,grade,hero.level,hero.job,0):makeGear(slot,grade,hero.level,slot===0?hero.job:undefined)
 }
 const materialSale=(item:Material)=>Math.max(1,Math.floor(materialPrice[item]*.45))
-const sellPrice=(g:Gear)=>12+g.grade*22+g.plus*4+g.tier
 function perform(key:string,element:HTMLElement){
  if(key==='retry-assets'){location.reload();return}
  const [type,...args]=key.split(':'), id=args.join(':'), index=Number(id)
@@ -526,15 +584,46 @@ function perform(key:string,element:HTMLElement){
   if(!hero.items.warp){message('需要傳送卷軸','warn');return}
   openPanel('travel');return
  }
+ if(type==='shop-tab'&&panel==='shop'&&village){
+  shopTab=id==='sell'?'sell':'buy';saleDraft=undefined;itemSaleDraft=undefined;saleSelection.clear();renderPanel();return
+ }
+ if(panel==='shop'&&shopTab==='sell'&&village){
+  if(type==='sell'){previewSale([id]);return}
+  if(type==='sale-selected'){previewSale(saleSelection);return}
+  if(type==='sale-grade'){previewSale(hero.bag.filter(gear=>gear.grade===saleQuality).map(gear=>gear.uid));return}
+  if(type==='sale-item-cancel'){itemSaleDraft=undefined;renderPanel();return}
+  if(type==='sale-item-confirm'&&itemSaleDraft){
+   const {item,count}=itemSaleDraft
+   const total=materialSale(item)*count
+   itemSaleDraft=undefined
+   if(canSellItem(hero,item)&&hero.items[item]>=count&&hero.gold+total<=1e9){
+    hero.items[item]-=count;hero.gold+=total
+    storeProgress();paint();sound('loot');message('已出售 '+count+' 件，獲得 '+total+' 金幣','gold')
+   }else message('道具數量或金額已變更，請重新確認','warn')
+   renderPanel();return
+  }
+  if(type==='sale-clear'){saleSelection.clear();renderPanel();return}
+  if(type==='sale-cancel'){saleDraft=undefined;renderPanel();return}
+  if(type==='sale-confirm'&&saleDraft){
+   const draft=saleDraft
+   if(draft.rare&&!draft.second){draft.second=true;renderPanel();return}
+   saleDraft=undefined
+   if(sellQuotedGear(hero,draft.ids,draft.total,draft.second)){
+    for(const uid of draft.ids)saleSelection.delete(uid)
+    storeProgress();paint();sound('loot');message('已出售 '+draft.ids.length+' 件裝備，獲得 '+draft.total+' 金幣','gold')
+   }else message('裝備或總價已變更，請重新確認','warn')
+   renderPanel();return
+  }
+ }
  const g=allGear().find(g=>g.uid===id)
  const bagItem=hero.bag.find(g=>g.uid===id)
- if(type==='bag-tab'){bagTab=id==='all'||categories.includes(id as Category)?id as typeof bagTab:'all';renderPanel();return}
+ if(type==='bag-tab'){bagTab=id==='all'||Object.hasOwn(bagCategories,id)?id as typeof bagTab:'all';renderPanel();return}
  if(type==='doll-slot'&&panel==='shield'&&slots[index]){
-  selectedSlot=index;renderPanel()
+  selectedSlot=index;compareGear='';renderPanel()
   select(`[data-action="doll-slot:${index}"]`).focus({preventScroll:true})
   return
  }
- if(type==='sort-bag'){sortBag(hero.bag);storeProgress();renderPanel();return}
+ if(type==='sort-bag'){bagSort='slot';sortBag(hero.bag);storeProgress();renderPanel();return}
  if(type==='lock'&&(g||materials.includes(id as Material))){
   hero.locks=hero.locks.includes(id)?hero.locks.filter(key=>key!==id):[...hero.locks,id]
   storeProgress();renderPanel();return
@@ -546,7 +635,7 @@ function perform(key:string,element:HTMLElement){
   const previous=hero.worn[bagItem.slot]
   hero.bag=hero.bag.filter(g=>g!==bagItem)
   if(previous)hero.bag.push(previous)
-  hero.worn[bagItem.slot]=bagItem;record(hero,'equip');sound('hit');message('已穿戴 '+gearName(bagItem))
+  hero.worn[bagItem.slot]=bagItem;compareGear='';record(hero,'equip');sound('hit');message('已穿戴 '+gearName(bagItem))
  }else if(type==='unequip'&&hero.worn[index]){
   if(fullBag(hero)){message('背包已滿','warn');return}
   hero.bag.push(hero.worn[index]);delete hero.worn[index]
@@ -563,7 +652,7 @@ function perform(key:string,element:HTMLElement){
   const material=id as Material, input=element.parentElement?.querySelector('input'), quantity=input?.valueAsNumber??1
   const limit=activeShop===8?3:25, cost=quantity*materialPrice[material]
   if(!Number.isInteger(quantity)||quantity<1||quantity>stock(id,limit)||cost>hero.gold){message('請檢查購買數量、庫存與金幣','warn');return}
-  hero.items[material]+=quantity;hero.gold-=cost;hero.stock[id]=(hero.stock[id]??0)+quantity
+  addItem(hero,material,quantity);hero.gold-=cost;hero.stock[id]=(hero.stock[id]??0)+quantity
   message('已購買 '+quantity+' × '+materialNames[material])
  }else if(type==='purchase'&&village&&(shopSlots[activeShop]??[]).includes(index)){
   if(fullBag(hero)){message('背包已滿，未扣除金幣','warn');return}
@@ -571,17 +660,12 @@ function perform(key:string,element:HTMLElement){
   if(cost>hero.gold||!stock(key,activeShop===8?3:25)){message('金幣不足或已售罄','warn');return}
   hero.bag.push(shopGear(index,grade));hero.gold-=cost;hero.stock[key]=(hero.stock[key]??0)+1
   sound('loot')
- }else if(type==='sell-material'&&village&&materials.includes(id as Material)){
+ }else if(type==='sell-material'&&panel==='shop'&&shopTab==='sell'&&village&&materials.includes(id as Material)){
   const item=id as Material
-  if(materialLocked(hero,item)){message('道具已鎖定','warn');return}
+  if(!canSellItem(hero,item)){message('此道具無法出售','warn');return}
   const count=element.parentElement?.querySelector('input')?.valueAsNumber??1
   if(!Number.isInteger(count)||count<1||count>hero.items[item]){message('請輸入可出售的數量','warn');return}
-  hero.items[item]-=count;hero.gold+=materialSale(item)*count;sound('loot')
- }else if(type==='sell'&&village&&bagItem){
-  if(gearLocked(hero,bagItem)){message('裝備已鎖定','warn');return}
-  const price=sellPrice(bagItem)
-  hero.gold+=price;hero.bag=hero.bag.filter(g=>g!==bagItem);sound('loot')
-  message('已出售 '+gearName(bagItem)+'，獲得 '+price+' 金幣','gold')
+  itemSaleDraft={item,count};renderPanel();return
  }else if(type==='deposit'&&village&&bagItem){
   hero.bag=hero.bag.filter(g=>g!==bagItem);hero.vault.push(bagItem)
  }else if(type==='withdraw'&&village){
@@ -616,7 +700,11 @@ function perform(key:string,element:HTMLElement){
    if(quest.zone&&quest.event==='boss'&&fullBag(hero)){message('背包已滿，獎勵仍可領取','warn');return}
    hero.claims[id]=true;hero.gold+=30+quest.count*7+(quest.zone??0)*27
    world.reward(28+quest.count*7+(quest.zone??0)*36)
-   if(quest.zone&&quest.event==='boss')hero.bag.push(quest.zone>=9?makeRelic((quest.zone+2)%8+1,3,zones[quest.zone][1],hero.job,quest.zone-8):makeGear((quest.zone+2)%9,3,zones[quest.zone][1]))
+   if(quest.zone&&quest.event==='boss'){
+    const slot=(quest.zone+2)%9, tier=zones[quest.zone][1]
+    hero.bag.push(quest.zone>=9?makeRelic((quest.zone+2)%8+1,3,tier,hero.job,quest.zone-8):
+     makeGear(slot,3,tier,slot===0?hero.job:undefined))
+   }
    if(hero.tracking===id)hero.tracking=quests.find(q=>!hero.claims[q.id]&&hero.quests[q.id]!==undefined)?.id??''
    message('完成任務：'+quest.name,'gold')
   }
@@ -656,6 +744,18 @@ app.addEventListener('input',event=>{
 })
 app.addEventListener('change',async event=>{
  const input=event.target as HTMLInputElement
+ if(input.id==='bag-sort'&&Object.hasOwn(sortLabels,input.value)){
+  bagSort=input.value as keyof typeof sortLabels;renderPanel();select('#bag-sort').focus();return
+ }
+ if(input.id==='sale-quality'){saleQuality=Number(input.value);return}
+ if(input.dataset.saleId&&panel==='shop'&&shopTab==='sell'&&!saleDraft){
+  const uid=input.dataset.saleId
+  if(input.checked)saleSelection.add(uid)
+  else saleSelection.delete(uid)
+  const selected=quoteGearSale(hero,saleSelection)
+  select('.sale-summary').textContent='已選 '+selected.gear.length+' 件，可獲得 '+selected.total+' 金幣'
+  return
+ }
  if(input.id==='sale-slot'){
   saleSlot=input.value
   const scroll=select('.panel-body').scrollTop

@@ -35,17 +35,51 @@ export function collectDrop(hero:Hero,drop:Drop,auto=false){
  result.gold=drop.gold;hero.gold+=drop.gold;drop.gold=0
  if(takeMaterial&&drop.material){
   result.material=drop.material
-  hero.items[drop.material]++
+  addItem(hero,drop.material)
   delete drop.material
  }
  if(takeGear&&drop.gear){
   result.full=fullBag(hero)
   if(!result.full){
    result.gear=drop.gear
-   hero.bag.push(drop.gear)
+   drop.gear.acquiredAt=Date.now();hero.bag.push(drop.gear)
    delete drop.gear
   }
  }
  if(!drop.gear&&!drop.material&&!drop.gold)drops.splice(drops.indexOf(drop),1)
  return result
+}
+
+export const bagCategories={
+ weapon:'武器',armor:'防具',accessories:'飾品',consumables:'消耗品',
+ materials:'材料',scrolls:'魔法卷軸',quest:'任務道具'
+} as const
+export type BagCategory=keyof typeof bagCategories
+export const bagGearCategory=(gear:Gear):BagCategory=>gear.slot===7||gear.slot===8?'accessories':gearCategory(gear)
+export const bagItemCategory=(item:Material):BagCategory=>{
+ if(item==='shard')return 'quest'
+ if(item==='red'||item==='blue')return 'consumables'
+ if(item==='book')return 'materials'
+ return 'scrolls'
+}
+export function addItem(hero:Hero,item:Material,count=1){
+ hero.items[item]+=count
+ hero.itemAcquiredAt[item]=Date.now()
+}
+export const gearSalePrice=(gear:Gear)=>12+gear.grade*22+gear.plus*4+gear.tier
+export const canSellGear=(hero:Hero,gear:Gear)=>!gearLocked(hero,gear)&&!Object.values(hero.worn).some(worn=>worn.uid===gear.uid)
+export const canSellItem=(hero:Hero,item:Material)=>bagItemCategory(item)!=='quest'&&!materialLocked(hero,item)
+export function quoteGearSale(hero:Hero,ids:Iterable<string>){
+ const wanted=new Set(ids)
+ const gear=hero.bag.filter(item=>wanted.has(item.uid)&&canSellGear(hero,item))
+ return {gear,total:gear.reduce((total,item)=>total+gearSalePrice(item),0),rare:gear.some(item=>item.grade>=2)}
+}
+export function sellQuotedGear(hero:Hero,ids:string[],total:number,rareConfirmed:boolean){
+ if(!ids.length||new Set(ids).size!==ids.length)return false
+ const quote=quoteGearSale(hero,ids)
+ if(quote.gear.length!==ids.length||quote.total!==total||hero.gold+total>1e9||quote.rare&&!rareConfirmed)return false
+ const sold=new Set(ids)
+ hero.bag=hero.bag.filter(gear=>!sold.has(gear.uid))
+ hero.gold+=quote.total
+ return true
 }

@@ -1,0 +1,11 @@
+.doll-slot{color:var(--slot-ink)}
+.doll-slot .item-art{border-color:var(--slot-ink)}
+.doll-figure{position:relative;width:min(100%,116px);margin:0 auto;align-self:center;line-height:0}
+.doll-figure img{display:block;width:100%;height:auto;max-height:none;object-fit:initial}
+.doll-equipment{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;filter:drop-shadow(0 1px 1px #140d11)}
+.belt-icon{display:inline-grid;place-items:center;background-image:none;color:#edcb8f}
+.sale-toolbar{display:flex;align-items:center;flex-wrap:wrap;gap:4px}
+.sale-toolbar .sale-filter{margin:0}
+.sale-summary{color:#f4d9ae;margin:6px 0}
+.sale-check{display:inline-flex;align-items:center;gap:3px;min-height:35px;color:#ebd3b3}
+.sale-check input{width:19px;height:19px;accent-color:#c49959}

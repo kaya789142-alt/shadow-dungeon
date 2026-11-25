@@ -72,7 +72,7 @@ try{
  await page.getByLabel('畫質').selectOption('ultra')
  assert.ok(await size(page)>1.4)
  assert.equal(await page.locator('#app').getAttribute('data-text-size'),'large')
- const title=await page.getByText('暗影地下城 V3.1',{exact:true}).last()
+ const title=await page.getByText('暗影地下城 V3.2',{exact:true}).last()
  await title.scrollIntoViewIfNeeded()
  assert.ok(await title.isVisible())
  await button(page,'關閉視窗').tap()

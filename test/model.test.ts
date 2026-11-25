@@ -169,3 +169,38 @@ test('ground gear cannot duplicate a held UID and locked gear cannot risk destru
  hero.drops[0]=[{x:100,y:100,gold:0,gear:{...gear}}]
  assert.throws(()=>decodeSave(JSON.stringify(hero)),/重複/)
 })
+
+test('V3.2 quote settles exactly once and protects worn, locked and quest items',async()=>{
+ const {bagGearCategory,bagItemCategory,canSellItem,collectDrop,gearSalePrice,quoteGearSale,sellQuotedGear}=await import('../src/inventory.ts')
+ const hero=createHero('交易驗證',0)
+ const [weapon,locked]=hero.bag
+ delete weapon.acquiredAt
+ hero.bag=[locked]
+ hero.worn[0]=weapon
+ hero.locks=[locked.uid]
+ const rare=makeGear(9,2,10)
+ const ring=makeGear(8,0,5)
+ hero.drops[0]=[{x:805,y:552,gold:2,gear:rare,material:'warp'}]
+ collectDrop(hero,hero.drops[0][0],true)
+ hero.bag.push(ring)
+ assert.equal(bagGearCategory(rare),'armor')
+ assert.equal(bagGearCategory(ring),'accessories')
+ assert.equal(bagItemCategory('warp'),'scrolls')
+ assert.equal(canSellItem(hero,'shard'),false)
+ const loaded=decodeSave(JSON.stringify(hero))
+ assert.equal(loaded.worn[0].acquiredAt,undefined)
+ assert.equal(loaded.bag.find(g=>g.uid===rare.uid)?.slot,9)
+ assert.ok(loaded.itemAcquiredAt.warp)
+ const quote=quoteGearSale(loaded,[weapon.uid,locked.uid,rare.uid,ring.uid,rare.uid])
+ const ids=quote.gear.map(g=>g.uid)
+ assert.equal(quote.total,gearSalePrice(rare)+gearSalePrice(ring))
+ assert.equal(quote.rare,true)
+ assert.equal(sellQuotedGear(loaded,ids,quote.total,false),false)
+ loaded.locks.push(rare.uid)
+ assert.equal(sellQuotedGear(loaded,ids,quote.total,true),false)
+ loaded.locks.pop()
+ assert.equal(sellQuotedGear(loaded,ids,quote.total,true),true)
+ assert.equal(sellQuotedGear(loaded,ids,quote.total,true),false)
+ assert.equal(loaded.gold,182+quote.total)
+ assert.deepEqual(loaded.bag.map(g=>g.uid),[locked.uid])
+})

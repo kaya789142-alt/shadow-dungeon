@@ -11,7 +11,7 @@ import type { Point } from './navigation'
 import { WorldText } from './world-text'
 import { DisplayResolution } from './display'
 import { crossing, directions, edgeAt, edgePoint, landNeighbor, nextDirection, regionNeighbor, regionOffset, roadX, roadY } from './overworld'
-import { canCollect, collectDrop } from './inventory'
+import { addItem, canCollect, collectDrop } from './inventory'
 import type { Drop } from './inventory'
 import type { Direction } from './overworld'
 import { artKeys, creatureArt, heroArt, missingPortraits, motionKeys, PortraitSprites, preloadPortraits, townArt } from './portrait-sprites'
@@ -527,7 +527,7 @@ export class World extends Phaser.Scene {
   this.cameras.main.centerOn(refuge.x,refuge.y)
   if(this.hero.hidden.includes(zone)){this.callbacks.message('抵達隱密神龕');return}
   this.hero.hidden.push(zone);record(this.hero,'hidden');this.reward(zones[zone][1]*23)
-  this.hero.items.shard+=3;record(this.hero,'shard',3)
+  addItem(this.hero,'shard',3);record(this.hero,'shard',3)
   this.burst(secret,zones[zone][4],83);this.callbacks.message('發現隱藏區域，獲得影晶碎片','gold');this.callbacks.refresh()
  }
  usePotion(kind:'red'|'blue'){

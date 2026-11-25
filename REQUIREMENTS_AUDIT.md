@@ -541,3 +541,7 @@
 - 測試命令、結果及裝置限制。[V3.1 測試報告](docs/v3.1-verification.md)
 - 相同場景與解析度的實際畫面。[燼燈村、背包、道路及全螢幕](docs/evidence/v31-world.jpg)
 - 五職業使用同一幽暗森林位置的實際攻擊畫面。[職業比較](docs/evidence/v31-combat.jpg)
+
+## V3.2 裝備與背包追蹤
+
+需求狀態、新舊存檔、交易保護、實際遊戲截圖及尚有缺項見 [V3.2 驗收](docs/v3.2-verification.md)。

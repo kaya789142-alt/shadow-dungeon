@@ -1,4 +1,4 @@
-import { achievements, jobs, materialNames, quests, rules, zones } from './data.ts'
+import { achievements, jobs, materialNames, quests, rules, slots, zones } from './data.ts'
 import type { Detail } from './display.ts'
 import type { Gear, Material } from './data.ts'
 import { categories, defaultPickup } from './inventory.ts'
@@ -15,14 +15,14 @@ export function createHero(name:string, job:number) {
   zone:0, x:spawn.x, y:spawn.y, bag:[makeGear(0,0,1,job),makeGear(3,0,1)],
   worn:{} as Record<number,Gear>, vault:[] as Gear[],
   items:{red:8,blue:6,weapon:3,armor:3,bless:0,protect:1,warp:1,home:2,blink:2,morph:1,identify:2,book:2,shard:0} satisfies Record<Material,number>,
-  skills:[1,0,0,0,0], quests:{move:0,potion:0,gear:0,forge:0,learn:0} as Record<string,number>,
+  itemAcquiredAt:{} as Partial<Record<Material,number>>, skills:[1,0,0,0,0], quests:{move:0,potion:0,gear:0,forge:0,learn:0} as Record<string,number>,
   claims:{} as Record<string,boolean>, daily:day(), bestiary:{} as Record<number,number>,
   explored:{} as Record<number,number[]>, chests:[] as number[], hidden:[] as number[], morphs:[] as number[], stats:{} as Record<string,number>,
   title:'', music:.3, sfx:.65, stock:{} as Record<string,number>, tracking:'move', locks:[] as string[], drops:{} as Record<number,Drop[]>, pickup:{...defaultPickup,groups:[...categories]}, coordinates:'region-local' as const, preferences:{...defaultPreferences}
  }
 }
 export function makeGear(slot:number,grade:number,tier:number,job?:number,random=Math.random):Gear {
- return {uid:globalThis.crypto?.randomUUID?.()??(Date.now().toString(36)+Math.random().toString(36).slice(2)),slot,grade,tier,...(job===undefined?{}:{job}),plus:0,roll:1+Math.floor(random()*5),identified:grade<2}
+ return {uid:globalThis.crypto?.randomUUID?.()??(Date.now().toString(36)+Math.random().toString(36).slice(2)),slot,grade,tier,...(job===undefined?{}:{job}),plus:0,acquiredAt:Date.now(),roll:1+Math.floor(random()*5),identified:grade<2}
 }
 export function makeRelic(slot:number,grade:number,tier:number,job:number,relic:number){
  return {...makeGear(slot,grade,Math.min(50,tier),slot===0?job:undefined),relic,element:(relic+slot)%5,leech:slot===0||slot>=7?2+grade:0}
@@ -110,8 +110,8 @@ const integer = (value:unknown,min:number,max:number):value is number => typeof 
 const finite = (value:unknown,min:number,max:number):value is number => typeof value==='number'&&Number.isFinite(value)&&value>=min&&value<=max
 const integerRecord = (value:unknown) => object(value)&&Object.values(value).every(v=>integer(v,0,Number.MAX_SAFE_INTEGER))
 function validGear(value:unknown):value is Gear {
- return object(value)&&typeof value.uid==='string'&&/^[a-z0-9-]{1,90}$/i.test(value.uid)&&integer(value.slot,0,8)&&integer(value.grade,0,5)&&integer(value.tier,1,50)&&integer(value.plus,0,15)&&integer(value.roll,1,5)&&(value.element===undefined||integer(value.element,0,4))
-  &&(value.leech===undefined||integer(value.leech,0,12))&&(value.relic===undefined||integer(value.relic,0,4))&&typeof value.identified==='boolean'&&(value.slot!==0||integer(value.job,0,jobs.length-1))
+ return object(value)&&typeof value.uid==='string'&&/^[a-z0-9-]{1,90}$/i.test(value.uid)&&integer(value.slot,0,slots.length-1)&&integer(value.grade,0,5)&&integer(value.tier,1,50)&&integer(value.plus,0,15)&&integer(value.roll,1,5)&&(value.element===undefined||integer(value.element,0,4))
+  &&(value.leech===undefined||integer(value.leech,0,12))&&(value.relic===undefined||integer(value.relic,0,4))&&(value.acquiredAt===undefined||integer(value.acquiredAt,0,Number.MAX_SAFE_INTEGER))&&typeof value.identified==='boolean'&&(value.slot!==0||integer(value.job,0,jobs.length-1))
 }
 export function decodeSave(json:string):Hero {
  const value:unknown=JSON.parse(json)
@@ -141,6 +141,8 @@ export function decodeSave(json:string):Hero {
  const hero=value as unknown as Hero
  hero.name=hero.name.slice(0,16)
  hero.items.blink??=0
+ const itemDates=object(value.itemAcquiredAt)?value.itemAcquiredAt:{}
+ hero.itemAcquiredAt=Object.fromEntries(materials.flatMap(key=>integer(itemDates[key],0,Number.MAX_SAFE_INTEGER)?[[key,itemDates[key]]]:[]))
  hero.coordinates='region-local'
  hero.drops=drops as Hero['drops']
  const allowedLocks=new Set([...materials,...allGear.map(gear=>gear.uid)])

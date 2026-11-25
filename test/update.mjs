@@ -5,7 +5,7 @@ import { extname, resolve, sep, join } from 'node:path'
 import { chromium } from 'playwright'
 
 const dirs=process.argv.slice(2).map(path=>resolve(path))
-assert.equal(dirs.length,3,'Pass V2.1, V2.2 A, V2.2 B build directories')
+assert.equal(dirs.length,3,'Pass the legacy, current and candidate build directories')
 const [legacy,first,next]=dirs
 const release=async dir=>JSON.parse(await readFile(join(dir,'release.json'),'utf8'))
 const current=await release(first), candidate=await release(next)
@@ -61,9 +61,15 @@ try{
   // V2.1 has no listener for controllerchange.
   await page.close()
   page=await context.newPage()
-  const reopened=await page.goto(base)
-  const reopenedHtml=await reopened.text()
-  if(!reopenedHtml.includes(current.id))await page.goto(base+'?refresh='+encodeURIComponent(current.id))
+  await page.goto(base,{waitUntil:'domcontentloaded'})
+  const refresh=base+'?refresh='+encodeURIComponent(current.id)
+  // A restored tab can receive the outgoing worker's shell during the handover.
+  for(let attempt=0;attempt<3;attempt++){
+   const shellBuild=await page.evaluate(()=>document.querySelector('meta[name="shadow-build"]')?.content)
+   if(shellBuild===current.id)break
+   await page.goto(refresh,{waitUntil:'domcontentloaded'})
+  }
+  await page.waitForFunction(id=>document.querySelector('meta[name="shadow-build"]')?.content===id,current.id)
  }
  await button('繼續冒險').click()
  assert.equal(await meta(),current.id)

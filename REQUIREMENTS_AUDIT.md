@@ -11,11 +11,11 @@
 | 遠端 main | `263333c`，合併 V2.1，該樹的 package 仍為 2.1.0 |
 | V2.2 分支 | `138db57`，在遠端有分支，未列入 main 祖先 |
 | V3.0 分支 | `5cfb3c0`，在遠端有分支，未列入 main 祖先 |
-| V3.1 起點 | 由 V3.0 分支建立，其祖先保留 main 與 V2.2 的整合成果 |
+| V3.1 起點 | 由 V3.0 分支建立，其祖先保留 main 與 V2.2 的整合成果。V2.2 原始三筆 SHA 有完整檔案樹相同的對應提交，見[整合報告](docs/v3.1-integration.md) |
 | V3.1 遠端分支及 PR | 分支已推送，GitHub GraphQL 建立 PR 回覆 HTTP 403。可用 [main 與 V3.1 比較頁](https://github.com/kaya789142-alt/shadow-dungeon/compare/main...feat/shadow-dungeon-v3.1?expand=1)。 |
 | 正式主機及 Actions | 正式站 `release.json` 連線和 GitHub API Actions runs 查詢皆收到代理 HTTP 403 |
 | 失同步的可確認因素 | `.github/workflows/pages.yml` 只在 main 部署。遠端 main 不含 V2.2 或 V3.0 提交，所以這兩個分支的存在不構成正式發布證據。正式站當下實際版本和部署紀錄未驗證 |
-| 發布驗證 | `scripts/verify-release.mjs` 驗證預期 Git SHA、版本、首頁與 Worker 建置 ID、美術和配樂。核准後的正式發布由既有 Pages 工作流程執行 |
+| 發布驗證 | `scripts/verify-release.mjs` 驗證預期 Git SHA、版本、首頁與 Worker 建置 ID、美術、配樂與音效。整合版逐位元組驗證 78 份資源。核准後的正式發布由既有 Pages 工作流程執行 |
 
 ## 證據索引
 

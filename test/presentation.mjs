@@ -13,6 +13,12 @@ try{
  page.on('pageerror',error=>errors.push(error.message))
  await page.addInitScript(()=>{
   window.played=[]
+  window.sampleLengths=[]
+  const start=AudioBufferSourceNode.prototype.start
+  AudioBufferSourceNode.prototype.start=function(...args){
+   start.apply(this,args)
+   if(this.buffer)window.sampleLengths.push(this.buffer.duration)
+  }
   const play=HTMLMediaElement.prototype.play
   HTMLMediaElement.prototype.play=async function(){
    await play.call(this)
@@ -83,8 +89,17 @@ try{
  await button(page,'開啟區域地圖').tap()
  await page.locator('[data-action="travel-to:1"]').tap()
  await musicReady(page,'forest')
+ await button(page,'設定').tap()
+ await page.getByLabel('環境音量').evaluate(input=>{
+  input.value='0'
+  input.dispatchEvent(new Event('input',{bubbles:true}))
+  input.dispatchEvent(new Event('change',{bubbles:true}))
+ })
+ await button(page,'關閉視窗').tap()
+ const samples=await page.evaluate(()=>window.sampleLengths.length)
  await button(page,'切換自動練功').tap()
  await musicReady(page,'battle')
+ await page.waitForFunction(before=>window.sampleLengths.slice(before).some(length=>length>0&&length<2),samples)
  for(const [zone,x,y,clip] of [[3,177,540,'graveyard'],[6,177,540,'dungeon'],[12,1110,590,'boss']]){
   await button(page,'暗影地下城首頁').tap()
   await page.evaluate(({zone,x,y})=>{

@@ -55,6 +55,10 @@ export function unlock(){
  }
  if(context.state!=='running')void context.resume().catch(()=>{})
  if(active<0||retry)selectTheme(theme)
+ else if(decks[active].theme===theme&&decks[active].audio.paused){
+  // Safari can pause the media element independently of the Web Audio graph.
+  void decks[active].audio.play().catch(()=>{retry=true})
+ }
  if(context)void prepareFoley(context)
  if(!cueLoading&&context){
   cueLoading=true

@@ -1,6 +1,6 @@
 import Phaser from 'phaser'
 import '@fontsource-variable/noto-sans-tc'
-import { achievementTitles, attributes, createHero, decodeSave, expNeeded, load, makeGear, makeRelic, materials, record, rollover, save, spawn, upgrade, upgradeInfo } from './model'
+import { achievementTitles, attributes, createHero, decodeSave, expNeeded, gearPower, load, makeGear, makeRelic, materials, record, rollover, save, spawn, upgrade, upgradeInfo } from './model'
 import { achievements, allMonsters, elements, gearName, jobs, materialNames, morphs, pets, quality, qualityColors, quests, rules, safeZone, slots, vendors, zoneRoutes, zones } from './data'
 import type { Gear, Material, Quest } from './data'
 import { entry, exit, HEIGHT, WIDTH } from './art'
@@ -13,9 +13,10 @@ import './v2.css'
 import './v21.css'
 import './v22.css'
 import './v30.css'
+import './v31.css'
 import { bagLimit, categories, categoryNames, compatibleGear, fullBag, gearCategory, gearLocked, itemCategory, jobRequirement, materialLocked, sortBag } from './inventory'
 import type { Category } from './inventory'
-import { landNeighbor } from './overworld'
+import { directions, edgePoint, nextDirection, regionNeighbor } from './overworld'
 import { release, releaseDate, trackRelease, versionLabel } from './release'
 
 const app=document.querySelector<HTMLElement>('#app')!
@@ -55,6 +56,7 @@ app.innerHTML=`
   <div class="world-bottom">
    <div class="move-controls">
     <div id="joystick" class="joystick" aria-label="虛擬搖桿"><i class="joystick-cross"></i><span id="knob">${icon('cross',24)}</span></div>
+    ${action('fold-log','展開冒險紀錄',icon('book',17),'log-toggle small-icon')}
     <div class="log" aria-live="polite"><div class="log-head">${icon('chat',13)} 冒險紀錄</div><div id="log-lines"></div></div>
    </div>
    <div class="combat">
@@ -193,9 +195,11 @@ function drawMap(){
  const point=(x:number,y:number,col:string,size=2)=>{
   c.fillStyle=col;c.fillRect(Math.round(x/WIDTH*180-size/2),Math.round(y/HEIGHT*110-size/2),size,size)
  }
- const [back,next]=zoneRoutes(zone)
- if(back>=0)point(entry.x,entry.y,'#8ab8c8',4)
- if(next>=0)point(exit.x,exit.y,'#d9aa6b',4)
+ for(const direction of directions){
+  if(regionNeighbor(zone,direction)===undefined)continue
+  const sign=edgePoint(direction,64)
+  point(sign.x,sign.y,direction==='north'||direction==='west'?'#8ab8c8':'#d9aa6b',4)
+ }
  if(marker)point(marker.x,marker.y,'#92edaf',5)
  point(hero.x,hero.y,'#271e26',9);point(hero.x,hero.y,'#ffda8b',5)
 }
@@ -214,7 +218,7 @@ const itemIcon=(cell:number)=>`<i aria-hidden="true" class="item-art" style="--a
 const iconCell=(m:Material)=>m==='red'?9:m==='blue'?10:11
 const gearLabel=(g:Gear)=>`<span class="gear-label" style="color:${qualityColors[g.grade]}">${itemIcon(g.slot)}<span>${gearName(g)}</span></span>`
 const gearStats=(g:Gear)=>[g.element!==undefined?elements[g.element]:'',g.leech?'吸血 '+g.leech+'%':''].filter(Boolean).join(' · ')
-const gearDetail=(g:Gear)=>`${quality[g.grade]} · 階級 ${g.tier} · ${jobRequirement(g)} · 穿戴等級不限${g.identified?' · 附加屬性 +'+g.roll+(gearStats(g)?' · '+gearStats(g):''):' · 待鑑定'}`
+const gearDetail=(g:Gear)=>`${quality[g.grade]} · 階級 ${g.tier} · ${jobRequirement(g)} · 穿戴等級不限 · ${g.slot===0?'攻擊 +'+gearPower(g).toFixed(1):'防禦 +'+(gearPower(g)*.48).toFixed(1)}${g.identified?' · 附加屬性 +'+g.roll+(gearStats(g)?' · '+gearStats(g):''):' · 待鑑定'}`
 const materialPrice:Record<Material,number>={red:14,blue:16,weapon:33,armor:26,bless:180,protect:140,warp:34,home:25,blink:38,morph:65,identify:31,book:62,shard:10}
 const shopMaterials:Partial<Record<number,Material[]>>={2:['red','blue'],3:['weapon','armor','warp','home','blink','morph','identify'],8:['bless','protect','book','morph'],9:['book']}
 const shopSlots:Partial<Record<number,number[]>>={0:[0],1:[1,2,3,4,5,6,7,8],8:[0,6,7,8]}
@@ -264,6 +268,7 @@ function modal(body:string,extra=''){
  return `<div class="modal-shade ${extra}"><section class="dialog" role="dialog" aria-modal="${extra.includes('dock-panel')?'false':'true'}" aria-label="${titleState==='play'?sharedTitles[panel]:'暗影地下城'}">${body}</section></div>`
 }
 function renderPanel(){
+ app.dataset.dock=titleState==='play'&&!!panel&&panel!=='death'?panelMode:'none'
  const root=select('#modal-root')
  if(titleState==='title'){
   root.innerHTML=modal(`
@@ -369,8 +374,11 @@ function renderBody(){
   }
   case 'vault':return village?group('存入裝備',hero.bag.map(g=>row(gearLabel(g),gearDetail(g),button('deposit:'+g.uid,'存入'))).join('')||empty('背包沒有裝備。'))+group('倉庫',hero.vault.map(g=>row(gearLabel(g),gearDetail(g),button('withdraw:'+g.uid,'取出'))).join('')||empty('倉庫是空的。')):empty('請返回燼燈村使用倉庫。')
   case 'travel':return group('艾瑟蘭王國',
-   group('王國道路',`<div class="road-map">${[zones.slice(0,8),zones.slice(8)].map((chain,j)=>`<div>${chain.map(([name],i)=>`<span class="${hero.zone===i+j*8?'here':''}">${name}</span>`).join('<b aria-hidden="true">·</b>')}</div>`).join('')}</div>`)+zones.map(([name,level,,,,description],i)=>row(name+' '+badge(i===hero.zone?'所在區域':'等級 '+level),description,
-   i!==hero.zone&&hero.level>=level?([landNeighbor(hero.zone,-1),landNeighbor(hero.zone,1)].includes(i)?button('road-to:'+i,'沿路步行'):'')+
+   group('王國道路',`<div class="road-graph" aria-label="王國分區道路">
+   <div>${zones.slice(8).map(([label],i)=>`<span class="${hero.zone===i+8?'here':''}">${label}</span>`).join('')}</div>
+   <div class="road-joins" aria-label="五條南北接合道路">${'↕ '.repeat(5).trim().split(' ').map(mark=>`<b>${mark}</b>`).join('')}</div>
+   <div>${zones.slice(0,8).map(([label],i)=>`<span class="${hero.zone===i?'here':''}">${label}</span>`).join('')}</div></div>`)+zones.map(([name,level,,,,description],i)=>row(name+' '+badge(i===hero.zone?'所在區域':'等級 '+level),description,
+   i!==hero.zone&&hero.level>=level?(nextDirection(hero.zone,i,hero.level)?button('road-to:'+i,'沿路步行'):'')+
    (village||hero.items.warp>0?button('travel-to:'+i,village?'傳送':'卷軸傳送'):''):'' )).join(''))+(village?button('restore','在燼燈泉休息'):'')
   case 'codex':return group('成就',achievements.map(a=>row(a.name,a.description,badge(Math.min(hero.stats[a.event]??0,a.count)+' / '+a.count))).join(''))+
    group('變身圖鑑',morphs.map(([name,,move,atk],i)=>row(name,'移速 '+Math.round(move*100)+'% · 攻速 '+Math.round(atk*100)+'%',hero.morphs.includes(i)?button('morph:'+i,'變身'):badge('未解鎖'))).join(''))+
@@ -412,6 +420,13 @@ function perform(key:string,element:HTMLElement){
  const [type,...args]=key.split(':'), id=args.join(':'), index=Number(id)
  const village=safeZone(hero.zone)
  if(type==='close'){closePanel();return}
+ if(type==='fold-log'){
+  const visible=select('.move-controls').classList.toggle('show-log')
+  element.setAttribute('aria-expanded',String(visible))
+  element.setAttribute('aria-label',(visible?'收合':'展開')+'冒險紀錄')
+  element.title=(visible?'收合':'展開')+'冒險紀錄'
+  return
+ }
  if(type==='fold-map'||type==='fold-tracker'){
   const selector=type==='fold-map'?'.map-card':'.tracker'
   const folded=select(selector).classList.toggle('folded')

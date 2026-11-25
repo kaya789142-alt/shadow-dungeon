@@ -1,13 +1,16 @@
 import Phaser from 'phaser'
 import type { Pose } from './art'
 
-const adventurers=['knight','archer','mage','assassin','paladin']
+export const adventurers=['knight','archer','mage','assassin','paladin']
 const townsfolk=['arms','armor','herbs','scribe','smith','warehouse','navigator','herald','merchant','tutor']
 const beasts=['slime','wolf','guard','spider','wraith','dragon']
 export const artKeys=[...adventurers,...adventurers.map(job=>job+'-back'),...townsfolk,...beasts,
  'cottage-blue','cottage-red','cottage-green','spruce','boulder','arch','eclipse-emperor','necromancer','wood-behemoth',
  'flame-demon','fountain','oak','tomb','dungeon-arch','goblin','bone-archer','moth','tree-spirit','gargoyle','dark-lord']
 const directory=import.meta.env.BASE_URL+'art-v22/'
+const motionDirectory=import.meta.env.BASE_URL+'art-v31/'
+const frames=['stride-a','stride-b','strike','channel','recoil','fall']
+export const motionKeys=adventurers.map(job=>'motion-'+job)
 const path=(name:string)=>directory+name+'.webp'
 export const playerArt=(job:number)=>path(adventurers[job])
 export const townArt=(job:number)=>townsfolk[job]
@@ -36,19 +39,35 @@ export function creatureArt(name:string,region:number,boss=false){
 export function preloadPortraits(scene:Phaser.Scene){
  for(const name of artKeys)scene.load.image(name,path(name))
  scene.load.atlas('knight-motion',path('knight-motion'),directory+'knight-motion.json')
+ scene.load.image('equipment-art',import.meta.env.BASE_URL+'art-v30/items.webp')
+ for(const name of motionKeys)scene.load.atlas(name,motionDirectory+name+'.webp',motionDirectory+name+'.json')
 }
 export function missingPortraits(scene:Phaser.Scene){
- return [...artKeys,'knight-motion'].filter(name=>{
+ return [...artKeys,'knight-motion','equipment-art',...motionKeys].filter(name=>{
   const source=scene.textures.exists(name)?scene.textures.get(name).getSourceImage():undefined
-  return !(source instanceof HTMLImageElement)||source.naturalWidth<256||source.naturalHeight<256
+  return !(source instanceof HTMLImageElement)||source.naturalWidth<256||source.naturalHeight<256||motionKeys.includes(name)&&frames.some(frame=>!scene.textures.get(name).has(frame))
  })
 }
 export class PortraitSprites {
  private images=new Map<object|string,Phaser.GameObjects.Image>()
  private drawn=new Set<object|string>()
  private feet:Phaser.GameObjects.Image[]=[]
+ heroFrame=''
  private poses=new Map<object|string,{pose:Pose;since:number}>()
- constructor(private scene:Phaser.Scene){}
+ constructor(private scene:Phaser.Scene){
+  const equipment=scene.textures.get('equipment-art')
+  if(!equipment.has('shield'))equipment.add('shield',0,192,0,192,192)
+ }
+ armor(x:number,y:number,facing:number,pose:Pose,heading:number){
+  if(pose==='dead')return
+  const key='hero-shield'
+  let shield=this.images.get(key)
+  if(!shield){shield=this.scene.add.image(x,y,'equipment-art','shield');this.images.set(key,shield)}
+  this.drawn.add(key)
+  const upper=heading>=5&&heading<=7
+  shield.setVisible(true).setPosition(x-facing*17,y-44+(pose==='attack'?-3:0))
+   .setDepth(1+y/2000+(upper?-.0002:.0002)).setDisplaySize(28,28).setFlipX(facing<0)
+ }
  begin(){this.drawn.clear();for(const foot of this.feet)foot.setVisible(false)}
  end(){for(const [key,image] of this.images)if(!this.drawn.has(key))image.setVisible(false)}
  reset(){for(const image of [...this.images.values(),...this.feet])image.destroy();this.images.clear();this.poses.clear();this.feet=[]}
@@ -61,10 +80,11 @@ export class PortraitSprites {
   const fall=Math.min(1,elapsed*6)
   const walking=pose==='run'||pose==='walk'
   const rear=direction>=5&&direction<=7&&adventurers.includes(name)
-  const frame=name==='knight'&&!rear?(walking?Math.floor(time*(pose==='run'?11:7))%2?'stride-a':'stride-b':
-   pose==='attack'&&elapsed>.045?'strike':pose==='hurt'?'recoil':pose==='dead'?'fall':'__BASE'):'__BASE'
+  const frame=adventurers.includes(name)&&!rear?(walking?Math.floor(time*(pose==='run'?11:7))%2?'stride-a':'stride-b':
+   pose==='attack'&&elapsed>.045?'strike':pose==='cast'?'channel':pose==='hurt'?'recoil':pose==='dead'?'fall':'__BASE'):'__BASE'
   const authored=frame!=='__BASE'
-  const texture=authored?'knight-motion':rear?name+'-back':name
+  const texture=authored?'motion-'+name:rear?name+'-back':name
+  if(key==='hero')this.heroFrame=texture+':'+frame
   let image=this.images.get(key)
   if(!image){
    image=this.scene.add.image(x,y,texture,frame).setOrigin(.5,1)
@@ -90,7 +110,7 @@ export class PortraitSprites {
   const cut=Math.round(sourceHeight*.80)
   const split=Math.round(sourceWidth*.51)
   const depth=1+y/2000
-  image.setFrame(frame).setVisible(true).setDepth(depth).setFlipX(facing<0).setAngle(authored?step*.7:angle)
+  image.setFrame(frame).setVisible(true).setDepth(depth).setFlipX(facing<0).setAngle(authored?0:angle)
    .setPosition(x+lunge,y+rise).setDisplaySize(width*narrow,renderedHeight*stretch+Math.abs(step)*.9)
    .setAlpha(pose==='dead'?.72:1)
   if(walk){

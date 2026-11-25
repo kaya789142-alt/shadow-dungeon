@@ -1,5 +1,5 @@
 import Phaser from 'phaser'
-import { landNeighbor, onRoad, roadY, regionWidth, regionHeight } from './overworld'
+import { landNeighbor, onRoad, onVerticalRoad, regionNeighbor, roadX, roadY, regionWidth, regionHeight } from './overworld'
 import { safeZone, zones } from './data'
 
 import { cobble, roofMaterial } from './terrain-material'
@@ -115,8 +115,10 @@ export function drawWorld(scene:Phaser.Scene,zone:number){
  const has=(name:string)=>scene.textures.exists(name)
  const settlement=safeZone(zone)
  const organic=settlement||zone===1||zone===2||zone===10
- const path=(x:number,y:number)=>Math.min(x,WIDTH-x)<172?onRoad(y):
-  Math.abs(y-roadY-Math.sin(x/165)*12*Math.min(1,(Math.min(x,WIDTH-x)-172)/104))<(settlement?52:36)
+ const north=regionNeighbor(zone,'north')!==undefined,south=regionNeighbor(zone,'south')!==undefined
+ const verticalTrail=(x:number,y:number)=>onVerticalRoad(x)&&(north&&y<roadY+42||south&&y>roadY-42)
+ const path=(x:number,y:number)=>verticalTrail(x,y)|| (Math.min(x,WIDTH-x)<172?onRoad(y):
+  Math.abs(y-roadY-Math.sin(x/165)*12*Math.min(1,(Math.min(x,WIDTH-x)-172)/104))<(settlement?52:36))
  const plaza=(x:number,y:number)=>settlement&&x>486&&x<1110&&y>290&&y<727
  ink(g,dark,0,0,WIDTH,HEIGHT)
  for(let y=0;y<HEIGHT;y+=16)for(let x=0;x<WIDTH;x+=16){
@@ -276,6 +278,29 @@ export function drawWorld(scene:Phaser.Scene,zone:number){
    c.fillRect(Math.min(edge,inner),top,112,height)
   }
  }
+ for(const direction of ['north','south'] as const){
+  if(regionNeighbor(zone,direction)===undefined)continue
+  const edge=direction==='north'?0:HEIGHT, inward=edge+(direction==='north'?124:-124)
+  for(const [left,width,tint] of [[0,roadX-51,'43,51,43'],[roadX-51,102,'91,81,68'],[roadX+51,WIDTH-roadX-51,'43,51,43']] as const){
+   const transition=c.createLinearGradient(0,edge,0,inward)
+   transition.addColorStop(0,'rgba('+tint+',1)')
+   transition.addColorStop(.55,'rgba('+tint+',.45)')
+   transition.addColorStop(1,'rgba('+tint+',0)')
+   c.fillStyle=transition;c.fillRect(left,Math.min(edge,inward),width,124)
+  }
+ }
+ c.globalAlpha=.76
+ for(let y=0;y<HEIGHT;y+=14){
+  if(!verticalTrail(roadX,y))continue
+  for(let x=roadX-48+(Math.floor(y/14)%2)*8;x<roadX+38;x+=17){
+   cobble(c,x+detail()*1.4,y+detail(),15.6,12.4,.82,detail)
+  }
+ }
+ c.globalAlpha=1
+ const lighting=c.createRadialGradient(WIDTH*.51,HEIGHT*.45,150,WIDTH*.51,HEIGHT*.45,900)
+ lighting.addColorStop(0,settlement?'#f2bc7e19':'#bfcfbd17')
+ lighting.addColorStop(.64,'#e5ccb009');lighting.addColorStop(1,'#e5ccb000')
+ c.fillStyle=lighting;c.fillRect(0,0,WIDTH,HEIGHT)
  c.globalAlpha=.58
  if(!organic&&zone!==3){
   c.lineCap='round'

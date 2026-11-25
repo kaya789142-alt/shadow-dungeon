@@ -127,13 +127,18 @@ test('V2.1 graphics presets respect DPR, backing-pixel budget and adaptive fallb
  assert.equal(current.bag[0].uid,old.bag[0].uid)
 })
 
-test('walkable boundaries preserve fractional local position and keep the harbor a separate chain',async()=>{
- const {crossing,landNeighbor}=await import('../src/overworld.ts')
+test('walkable boundaries preserve local coordinates and connect all thirteen regions',async()=>{
+ const {crossing,landNeighbor,nextDirection}=await import('../src/overworld.ts')
  assert.deepEqual(crossing(0,1,1504.5,535),{zone:1,x:4.5,y:535,shift:1500})
  assert.deepEqual(crossing(1,1,-3.5,552),{zone:0,x:1496.5,y:552,shift:-1500})
  assert.equal(crossing(1,1,1501,535),undefined)
  assert.equal(crossing(1,50,1501,650),undefined)
  assert.equal(landNeighbor(8,-1),undefined)
+ assert.deepEqual(crossing(0,1,760,-3),{zone:8,x:760,y:1021,shift:0,shiftY:-1024})
+ assert.deepEqual(crossing(8,1,758,1027),{zone:0,x:758,y:3,shift:0,shiftY:1024})
+ assert.equal(crossing(1,1,760,-3),undefined)
+ assert.equal(nextDirection(0,8,1),'north')
+ assert.ok(zones.every((_,i)=>i===0||nextDirection(0,i,50)))
 })
 test('partial pickup keeps full-bag and filtered gear on the ground without duplicating rewards',async()=>{
  const {bagLimit,collectDrop}=await import('../src/inventory.ts')

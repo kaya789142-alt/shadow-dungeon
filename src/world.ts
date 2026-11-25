@@ -10,10 +10,11 @@ import { clearPath, distance as dist, makeRoute } from './navigation'
 import type { Point } from './navigation'
 import { WorldText } from './world-text'
 import { DisplayResolution } from './display'
-import { crossing, landNeighbor, onRoad, roadY } from './overworld'
+import { crossing, directions, edgeAt, edgePoint, landNeighbor, nextDirection, regionNeighbor, regionOffset, roadX, roadY } from './overworld'
 import { canCollect, collectDrop } from './inventory'
 import type { Drop } from './inventory'
-import { artKeys, creatureArt, heroArt, missingPortraits, PortraitSprites, preloadPortraits, townArt } from './portrait-sprites'
+import type { Direction } from './overworld'
+import { artKeys, creatureArt, heroArt, missingPortraits, motionKeys, PortraitSprites, preloadPortraits, townArt } from './portrait-sprites'
 
 type Monster={definition:typeof allMonsters[number]; x:number;y:number; home:Point; hp:number; max:number; hitAt:number; sleep:number; frozen:number; angry:boolean; hurt:number; tell?:{end:number;x:number;y:number; angle:number; phase:number}}
 type Strike='slash'|'arrow'|'spell'|'ring'
@@ -54,8 +55,10 @@ export class World extends Phaser.Scene {
  private graphics!:Phaser.GameObjects.Graphics
  private battleEffects!:Phaser.GameObjects.Graphics
  private worldText!:WorldText
+ private viewportNode!:HTMLElement
  private mapCache=new Map<number,ReturnType<typeof drawWorld>>()
  private awaitingMap?:number
+ private journey?:number
  private readonly regionStates=new Map<number,{mobs:Monster[];guards:Monster[]}>()
  private lastFullWarning=-10
  private lastRoadWarning=-10
@@ -86,8 +89,9 @@ export class World extends Phaser.Scene {
    this.scene.pause()
    return
   }
-  this.assetCount=artKeys.length+1
-  document.querySelector<HTMLElement>('#game')!.dataset.art=String(this.assetCount)
+  this.assetCount=artKeys.length+2+motionKeys.length
+  this.viewportNode=document.querySelector<HTMLElement>('#game')!
+  this.viewportNode.dataset.art=String(this.assetCount)
   this.graphics=this.add.graphics()
   this.battleEffects=this.add.graphics().setDepth(3)
   this.portraits=new PortraitSprites(this)
@@ -123,38 +127,54 @@ export class World extends Phaser.Scene {
   if(!map){map=drawWorld(this,zone);this.mapCache.set(zone,map)}
   return map
  }
+ private mapNeighbors(){
+  const {zone,x,y}=this.hero
+  const distances={west:x,east:WIDTH-x,north:y,south:HEIGHT-y}
+  return directions.flatMap(direction=>{
+   const id=regionNeighbor(zone,direction)
+   if(id===undefined)return []
+   const horizontal=direction==='west'||direction==='east'
+   const aligned=horizontal?Math.abs(y-roadY)<215:Math.abs(x-roadX)<250
+   return [{id,direction,distance:distances[direction],aligned,horizontal}]
+  }).sort((a,b)=>Number(b.aligned)-Number(a.aligned)||a.distance-b.distance)
+ }
  private syncMaps(){
-  const zone=this.hero.zone, left=landNeighbor(zone,-1), right=landNeighbor(zone,1)
+  const zone=this.hero.zone, neighbors=this.mapNeighbors()
   const limit=navigator.maxTouchPoints>0?2:3
-  const preferred=this.hero.x<WIDTH/2?[left,right]:[right,left]
-  const keep=[zone,...preferred.filter((id):id is number=>id!==undefined&&this.mapCache.has(id))].slice(0,limit)
+  const keep=[zone,...neighbors.filter(link=>this.mapCache.has(link.id)).map(link=>link.id)].slice(0,limit)
   for(const [id,map] of this.mapCache){
    if(!keep.includes(id)){map.world.destroy();this.textures.remove('map-'+id);this.mapCache.delete(id);continue}
-   map.world.setX(id===left?-WIDTH:id===right?WIDTH:0)
+   const link=neighbors.find(link=>link.id===id)
+   const offset=link?regionOffset(link.direction):{x:0,y:0}
+   map.world.setPosition(offset.x,offset.y)
   }
-  const x=left!==undefined?-WIDTH:0
-  this.cameras.main.setBounds(x,0,WIDTH+(left!==undefined?WIDTH:0)+(right!==undefined?WIDTH:0),HEIGHT)
   document.querySelector<HTMLElement>('#game')!.dataset.maps=String(this.mapCache.size)
  }
+ private cameraBounds(){
+  const camera=this.cameras.main
+  const link=this.mapNeighbors().find(link=>link.aligned&&this.mapCache.has(link.id)&&
+   link.distance<(link.horizontal?camera.width:camera.height)/camera.zoom/2+100)
+  const offset=link?regionOffset(link.direction):{x:0,y:0}
+  camera.setBounds(Math.min(0,offset.x),Math.min(0,offset.y),WIDTH+Math.abs(offset.x),HEIGHT+Math.abs(offset.y))
+ }
  private prefetch(){
-  const current=this.hero.zone
-  const margin=Math.min(WIDTH*.56,this.cameras.main.width/this.cameras.main.zoom/2+150)
-  const direction=this.hero.x<WIDTH/2?-1:1
-  if(Math.min(this.hero.x,WIDTH-this.hero.x)>margin)return
-  const next=landNeighbor(current,direction)
-  if(next===undefined||this.awaitingMap===next||this.mapCache.has(next))return
-  this.awaitingMap=next
+  const current=this.hero.zone, camera=this.cameras.main
+  const link=this.mapNeighbors().find(link=>link.aligned&&
+   link.distance<(link.horizontal?camera.width:camera.height)/camera.zoom/2+160)
+  if(!link||this.awaitingMap===link.id||this.mapCache.has(link.id))return
+  this.awaitingMap=link.id
   const prepare=()=>{
-   if(this.awaitingMap!==next)return
+   if(this.awaitingMap!==link.id)return
    this.awaitingMap=undefined
    if(this.hero.zone!==current)return
-   this.ensureMap(next);this.syncMaps()
+   this.ensureMap(link.id);this.syncMaps()
   }
-  if(typeof window.requestIdleCallback==='function')window.requestIdleCallback(prepare,{timeout:180})
-  else window.setTimeout(prepare,20)
+  if(typeof window.requestIdleCallback==='function')window.requestIdleCallback(prepare,{timeout:130})
+  else window.setTimeout(prepare,16)
  }
- enter(zone:number,position?:Point,silent=false,shift=0){
+ enter(zone:number,position?:Point,silent=false,shift=0,shiftY=0){
   const camera=this.cameras.main
+  if(!shift&&!shiftY)this.journey=undefined
   const center={x:camera.scrollX+camera.width/2,y:camera.scrollY+camera.height/2}
   this.hero.zone=zone
   this.portraits.reset()
@@ -177,20 +197,32 @@ export class World extends Phaser.Scene {
    this.label(refuge.x,refuge.y-46,'隱密神龕','#d6b2eb')
   }
   const [back,next]=zoneRoutes(zone)
-  if(back>=0)this.label(entry.x,entry.y-96,zones[back][0],'#b1dce1')
+  if(back>=0&&zone!==8)this.label(entry.x,entry.y-96,zones[back][0],'#b1dce1')
+  for(const direction of ['north','south'] as const){
+   const nearby=regionNeighbor(zone,direction)
+   if(nearby===undefined)continue
+   const marker=edgePoint(direction,124)
+   this.label(marker.x,marker.y-36,(direction==='north'?'↑ ':'↓ ')+zones[nearby][0],'#e6cca0')
+  }
   if(next>=0)this.label(exit.x,exit.y-96,zones[next][0],'#e7bd86')
   if(zone>=9)this.label(riftPoint.x,riftPoint.y-43,'不穩定的裂隙','#f0b4ff')
   if(!silent)record(this.hero,'visit')
   const cached=this.regionStates.get(zone)
   if(cached){this.mobs=cached.mobs;this.riftGuards=cached.guards}
   else{this.riftGuards=[];this.populate(zone);this.regionStates.set(zone,{mobs:this.mobs,guards:this.riftGuards})}
-  if(shift)camera.centerOn(center.x-shift,center.y)
+  this.cameraBounds()
+  if(shift||shiftY)camera.centerOn(center.x-shift,center.y-shiftY)
   else{
    this.resize()
    // A direct teleport can put the opposite edge in view immediately.
    this.prefetch()
   }
   this.explore()
+  if(this.journey!==undefined){
+   const next=nextDirection(this.hero.zone,this.journey,this.hero.level)
+   if(next)this.roadDestination(next)
+   else this.journey=undefined
+  }
   if(!silent){this.callbacks.message('抵達 '+zones[zone][0]);this.callbacks.refresh()}
  }
  private label(x:number,y:number,text:string,color:string){this.worldText.label({x,y},text,color)}
@@ -219,22 +251,28 @@ export class World extends Phaser.Scene {
   }
  }
  private passable(x:number,y:number,allowRoad=false){
-  const link=x<24?landNeighbor(this.hero.zone,-1):x>WIDTH-24?landNeighbor(this.hero.zone,1):undefined
-  const corridor=allowRoad&&link!==undefined&&onRoad(y)&&x>-70&&x<WIDTH+70
+  const edge=allowRoad?edgeAt(x,y,28):undefined
+  const corridor=edge!==undefined&&regionNeighbor(this.hero.zone,edge)!==undefined&&x>-70&&x<WIDTH+70&&y>-70&&y<HEIGHT+70
   return (inside(x,y)||corridor)&&this.obstacles.every(o=>Math.hypot(o.x-x,o.y-y)>o.r+6)
  }
  private walk(entity:Point,dx:number,dy:number){
-  const x=entity.x,y=entity.y, hero=entity===this.hero, nextX=x+dx
-  if(hero&&(nextX<0||nextX>=WIDTH)&&onRoad(y)){
-   const step=crossing(this.hero.zone,this.hero.level,nextX,y)
-   if(step){this.enter(step.zone,step,false,step.shift);return true}
-   const limit=landNeighbor(this.hero.zone,nextX<0?-1:1)
-   if(limit!==undefined&&this.clock-this.lastRoadWarning>2.2){
-    this.lastRoadWarning=this.clock
-    this.callbacks.message('前往 '+zones[limit][0]+' 需要等級 '+zones[limit][1],'warn')
+  const x=entity.x,y=entity.y, player=entity===this.hero
+  for(const axis of ['x','y'] as const){
+   if(axis==='x'&&!dx||axis==='y'&&!dy)continue
+   const point={x:entity.x+(axis==='x'?dx:0),y:entity.y+(axis==='y'?dy:0)}
+   const edge=player?edgeAt(point.x,point.y):undefined
+   if(edge){
+    const step=crossing(this.hero.zone,this.hero.level,point.x,point.y)
+    if(step){this.enter(step.zone,step,false,step.shift,step.shiftY);return true}
+    const limit=regionNeighbor(this.hero.zone,edge)
+    if(limit!==undefined&&this.clock-this.lastRoadWarning>2.2){
+     this.lastRoadWarning=this.clock
+     this.callbacks.message('前往 '+zones[limit][0]+' 需要等級 '+zones[limit][1],'warn')
+    }
+   }else if(this.passable(point.x,point.y,player)){
+    entity.x=point.x;entity.y=point.y
    }
-  }else if(this.passable(nextX,y,hero))entity.x=nextX
-  if(this.passable(entity.x,entity.y+dy,hero))entity.y+=dy
+  }
   return dist(entity,{x,y})>.01
  }
  private direction(x:number,y:number){return (Math.round(Math.atan2(y,x)/(Math.PI/4))+8)%8}
@@ -263,6 +301,7 @@ export class World extends Phaser.Scene {
   this.target=undefined;this.destination=point;this.interaction=action;this.interactionPoint=point;this.routeGoal=undefined
  }
  point(p:Point){
+  this.journey=undefined
   const mob=this.mobs.filter(m=>m.hp>0&&Math.hypot(m.x-p.x,m.y-19-p.y)<(m.definition.boss?44:29)).sort((a,b)=>dist(p,a)-dist(p,b))[0]
   if(mob){this.lock(mob);return}
   const near=(q:Point,size=41)=>dist(p,q)<size||dist(p,{x:q.x,y:q.y-34})<size
@@ -274,9 +313,12 @@ export class World extends Phaser.Scene {
   }
   const [back,next]=zoneRoutes(zone)
   const west=landNeighbor(zone,-1), east=landNeighbor(zone,1)
-  if(west!==undefined&&(p.x<0||near(entry,53))){this.roadDestination(-1);return}
-  if(east!==undefined&&(p.x>=WIDTH||near(exit,53))){this.roadDestination(1);return}
-  if(back>=0&&near(entry,53)){this.approach(entry,()=>this.travel(back,true));return}
+  if(west!==undefined&&(p.x<0||near(entry,53))){this.roadDestination('west');return}
+  if(east!==undefined&&(p.x>=WIDTH||near(exit,53))){this.roadDestination('east');return}
+  for(const direction of ['north','south'] as const){
+   if(regionNeighbor(zone,direction)!==undefined&&(near(edgePoint(direction,124),64)||direction==='north'&&p.y<0||direction==='south'&&p.y>=HEIGHT)){this.roadDestination(direction);return}
+  }
+  if(back>=0&&near(entry,53)){if(zone===8)this.roadDestination('south');else this.approach(entry,()=>this.travel(back,true));return}
   if(next>=0&&near(exit,53)){this.approach(exit,()=>this.travel(next));return}
   if(zone>=9&&near(riftPoint,42)){this.approach(riftPoint,()=>this.activateRift());return}
   if(!safeZone(zone)&&near(chest,33)){this.approach(chest,()=>this.openChest());return}
@@ -289,23 +331,22 @@ export class World extends Phaser.Scene {
   this.routeGoal=undefined;this.clickMarker=this.destination;this.clickUntil=this.clock+.46
  }
  walkToRegion(zone:number){
-  if(this.hero.level<zones[zone]?.[1])return false
-  const direction=landNeighbor(this.hero.zone,1)===zone?1:landNeighbor(this.hero.zone,-1)===zone?-1:0
+  const direction=nextDirection(this.hero.zone,zone,this.hero.level)
   if(!direction)return false
+  this.journey=zone
   this.roadDestination(direction)
   return true
  }
- private roadDestination(direction:-1|1){
-  const next=landNeighbor(this.hero.zone,direction)
+ private roadDestination(direction:Direction){
+  const next=regionNeighbor(this.hero.zone,direction)
   if(next===undefined)return
   if(this.hero.level<zones[next][1]){
    this.callbacks.message('需要等級 '+zones[next][1],'warn')
    return
   }
-  const approach={x:direction<0?29:WIDTH-29,y:roadY}
-  this.approach(approach,()=>{
+  this.approach(edgePoint(direction,44),()=>{
    this.routeGoal=undefined
-   this.destination={x:direction<0?-12:WIDTH+12,y:roadY}
+   this.destination=edgePoint(direction,-12)
   })
  }
  travel(zone:number,back=false){
@@ -609,6 +650,7 @@ export class World extends Phaser.Scene {
    const speed=187*(this.morph?morphs[this.morph.id][2]:1)*(this.pet?.id===0?1.09:1)
    this.moving=false;this.running=false
    if(dx||dy){
+    this.journey=undefined
     const norm=Math.max(1,Math.hypot(dx,dy))
     this.destination=undefined;this.interaction=undefined;this.interactionPoint=undefined;this.target=undefined
     this.running=!!k?.SHIFT.isDown||Math.hypot(this.joystick.x,this.joystick.y)>.9
@@ -652,6 +694,7 @@ export class World extends Phaser.Scene {
     hero.zone===1||hero.zone===10?'forest':hero.zone===3?'graveyard':'dungeon')
   }else{this.moving=false;if(!this.activePlay)soundtrack('title')}
   const camera=this.cameras.main
+  this.cameraBounds()
   const cx=camera.scrollX+camera.width/2,cy=camera.scrollY+camera.height/2
   camera.centerOn(Phaser.Math.Linear(cx,this.hero.x,1-Math.exp(-dt*10)),Phaser.Math.Linear(cy,this.hero.y-15,1-Math.exp(-dt*10)))
   this.prefetch()
@@ -660,6 +703,8 @@ export class World extends Phaser.Scene {
  navigateQuest(){
   const point=this.questPoint
   if(!point||this.dead)return false
+  const quest=quests.find(q=>q.id===this.hero.tracking)
+  if(quest?.zone!==undefined&&quest.zone!==this.hero.zone)return this.walkToRegion(quest.zone)
   this.point(point)
   this.clickMarker=point;this.clickUntil=this.clock+2
   return true
@@ -669,10 +714,8 @@ export class World extends Phaser.Scene {
   if(!quest||this.hero.claims[quest.id])return undefined
   const zone=this.hero.zone
   if(quest.zone!==undefined&&quest.zone!==zone){
-   const [back,next]=zoneRoutes(zone)
-   if(quest.zone>=8&&zone<8)return zone===0?undefined:entry
-   if(quest.zone<8&&zone>=8)return entry
-   return quest.zone>zone&&next>=0?exit:back>=0?entry:undefined
+   const direction=nextDirection(zone,quest.zone,this.hero.level)
+   return direction?edgePoint(direction,120):undefined
   }
   if(quest.event==='chest')return chest
   if(quest.event==='hidden')return secret
@@ -826,7 +869,10 @@ export class World extends Phaser.Scene {
    const pose:Pose=this.dead?'dead':this.poseUntil>this.clock?this.pose:this.moving?(this.running?'run':'walk'):'idle'
    const name=mix?['guard','guard','wolf','wraith','guard','dragon'][this.morph!.id]:heroArt(hero.job)
    g.fillStyle(0x120e16,.49).fillEllipse(hero.x,hero.y+1,43,13)
-   this.portraits.draw('hero',name,hero.x,hero.y,87,pose,this.previewFrames,this.heading)
+   this.portraits.draw('hero',name,hero.x,hero.y,91,pose,this.previewFrames,this.heading)
+   if(hero.worn[1]&&!mix)this.portraits.armor(hero.x,hero.y,this.facing,pose,this.heading)
+   if(this.viewportNode.dataset.pose!==this.portraits.heroFrame)this.viewportNode.dataset.pose=this.portraits.heroFrame
+   if(this.viewportNode.dataset.facing!==String(this.heading))this.viewportNode.dataset.facing=String(this.heading)
    const weapon=hero.worn[0], armor=hero.worn[3]
    if(armor&&armor.grade>=2){
     const tint=colorNumber(qualityColors[armor.grade])

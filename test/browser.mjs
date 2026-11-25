@@ -121,7 +121,7 @@ try{
  await map.locator('[data-action="accept:harbor"]').click()
  await close(map)
  await button(map,'導航至任務目標').click()
- await map.locator('[data-action="travel-to:8"]').click()
+ await map.waitForFunction(()=>document.querySelector('#map-name')?.textContent==='灰港要塞',null,{timeout:15000})
  assert.equal(await map.locator('#map-name').textContent(),'灰港要塞')
  assert.equal((await read(map)).quests.harbor,1)
  await button(map,'開啟區域地圖').click()

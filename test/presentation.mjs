@@ -17,6 +17,7 @@ try{
   HTMLMediaElement.prototype.play=async function(){
    await play.call(this)
    window.played.push(this.currentSrc)
+   window.lastMedia=this
   }
  })
  const requests=[],art=[]
@@ -35,6 +36,13 @@ try{
  await page.getByLabel('角色名稱').fill('畫質驗證')
  await button(page,'進入燼燈村').tap()
  await musicReady(page,'village')
+ const resumes=await page.evaluate(()=>{
+  window.lastMedia.pause()
+  return window.played.filter(url=>url.endsWith('/village.m4a')).length
+ })
+ await button(page,'設定').tap()
+ await page.waitForFunction(before=>window.played.filter(url=>url.endsWith('/village.m4a')).length>before,resumes)
+ await button(page,'關閉視窗').tap()
  const visible=page.locator('#world-text .world-text').filter({hasText:/^藥水商人$/})
  assert.equal(await visible.evaluate(node=>getComputedStyle(node).fontSize),'13px')
  assert.equal(await page.locator('.player-title').evaluate(node=>getComputedStyle(node).fontSize),'15px')
@@ -58,7 +66,7 @@ try{
  await page.getByLabel('畫質').selectOption('ultra')
  assert.ok(await size(page)>1.4)
  assert.equal(await page.locator('#app').getAttribute('data-text-size'),'large')
- const title=await page.getByText('暗影地下城 V3.0',{exact:true}).last()
+ const title=await page.getByText('暗影地下城 V3.1',{exact:true}).last()
  await title.scrollIntoViewIfNeeded()
  assert.ok(await title.isVisible())
  await button(page,'關閉視窗').tap()

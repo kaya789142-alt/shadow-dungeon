@@ -1,0 +1,26 @@
+.stage .vignette{opacity:.70}
+.world-text{overflow-wrap:anywhere}
+.world-text.focus{font-weight:700}
+.road-graph{display:grid;gap:3px;padding:6px;background:#211c20;border:1px solid #755c40;overflow:auto}
+.road-graph>div{display:grid;grid-template-columns:repeat(8, minmax(56px,1fr));gap:3px}
+.road-graph span,.road-graph b{text-align:center;color:#e7cfae;overflow-wrap:anywhere}
+.road-graph span{padding:3px;border-bottom:1px solid #70523b}
+.road-graph span.here{background:#694c2e;color:#fff3cd}
+.road-graph b{color:#dfaa67}
+@media (orientation:landscape){
+ .dock-panel.open .dialog{width:min(470px,37vw);max-height:44%}
+ #app[data-dock="open"] .map-card,#app[data-dock="open"] .world-side,
+ #app[data-dock="open"] .world-bottom{visibility:hidden}
+}
+@media (orientation:landscape) and (max-height:550px){
+ .dock-panel.open .dialog{width:min(440px,42vw);max-height:39%}
+ .dock-panel.open .dialog .dialog-head{margin-bottom:4px}
+}
+
+.move-controls{position:relative}
+.move-controls .log{display:none}
+.move-controls .log-toggle{min-height:34px;width:34px}
+.move-controls.show-log .log{
+ display:block;position:absolute;left:0;bottom:100%;width:min(260px,66vw);
+ margin-bottom:6px;
+}

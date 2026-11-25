@@ -44,12 +44,11 @@ self.addEventListener('install',event=>{
 self.addEventListener('activate',event=>{
  event.waitUntil((async()=>{
   const prior=await older()
-  // V2.1 serves this cache entry ahead of the network on every navigation.
-  // Retire only its HTML after the replacement is complete, even if a browser
-  // gives one final navigation to the outgoing worker. Keep its hashed assets.
-  for(const key of prior){
-   if(/^[a-f0-9]{16}$/.test(key.slice(family.length)))await (await caches.open(key)).delete(shell)
-  }
+  // An outgoing controller may get a final navigation while a tab is being restored.
+  // Give that controller the new verified entry document while keeping its old hashed files.
+  const installed=await (await caches.open(current)).match(shell)
+  const previous=prior.at(-1)
+  if(previous&&installed)await (await caches.open(previous)).put(shell,installed)
   await Promise.all(prior.slice(0,-1).map(key=>caches.delete(key)))
   await self.clients.claim()
  })())

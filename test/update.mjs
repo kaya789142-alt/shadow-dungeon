@@ -9,6 +9,7 @@ assert.equal(dirs.length,3,'Pass V2.1, V2.2 A, V2.2 B build directories')
 const [legacy,first,next]=dirs
 const release=async dir=>JSON.parse(await readFile(join(dir,'release.json'),'utf8'))
 const current=await release(first), candidate=await release(next)
+const legacyHasUpdater=await release(legacy).then(()=>true).catch(()=>false)
 assert.notEqual(current.id,candidate.id)
 const prefix='/shadow-dungeon/'
 let directory=legacy, mixed=false
@@ -54,16 +55,20 @@ try{
  directory=first
  await update()
  await waitController(current.id)
- // An already running V2.1 page does not have the V2.2 update listener.
- await page.close()
- page=await context.newPage()
- const reopened=await page.goto(base)
- const reopenedHtml=await reopened.text()
- if(!reopenedHtml.includes(current.id))await page.goto(base+'?refresh='+encodeURIComponent(current.id))
+ if(legacyHasUpdater){
+  await page.waitForFunction(id=>document.querySelector('meta[name="shadow-build"]')?.content===id,current.id)
+ }else{
+  // V2.1 has no listener for controllerchange.
+  await page.close()
+  page=await context.newPage()
+  const reopened=await page.goto(base)
+  const reopenedHtml=await reopened.text()
+  if(!reopenedHtml.includes(current.id))await page.goto(base+'?refresh='+encodeURIComponent(current.id))
+ }
  await button('繼續冒險').click()
  assert.equal(await meta(),current.id)
  assert.equal((await read()).bag[0].uid,oldSave.bag[0].uid)
- console.log('舊版視窗關閉後重新開啟，已載入新版並保留裝備')
+ console.log('舊版已切換至新建置並保留裝備')
  // A CDN serving older HTML during install must leave the current build in operation.
  directory=next
  mixed=true
@@ -86,5 +91,5 @@ try{
  await button('繼續冒險').click()
  assert.equal(await meta(),candidate.id)
  assert.equal((await read()).name,oldSave.name)
- console.log('更新通過：V2.1 舊快取、CDN 混合建置、V2.2 自動切換、原始道具與玩家存檔、離線重載')
+ console.log('更新通過：舊版快取、CDN 混合建置、新建置自動切換、原始道具與玩家存檔、離線重載')
 }finally{await browser.close();await new Promise(resolve=>server.close(resolve))}

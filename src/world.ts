@@ -10,10 +10,12 @@ import { clearPath, distance as dist, makeRoute } from './navigation'
 import type { Point } from './navigation'
 import { WorldText } from './world-text'
 import { DisplayResolution } from './display'
+import { crossing, landNeighbor, onRoad, roadY } from './overworld'
+import { canCollect, collectDrop } from './inventory'
+import type { Drop } from './inventory'
 import { artKeys, creatureArt, heroArt, missingPortraits, PortraitSprites, preloadPortraits, townArt } from './portrait-sprites'
 
 type Monster={definition:typeof allMonsters[number]; x:number;y:number; home:Point; hp:number; max:number; hitAt:number; sleep:number; frozen:number; angry:boolean; hurt:number; tell?:{end:number;x:number;y:number; angle:number; phase:number}}
-type Loot={x:number;y:number; gold:number; material:Material; gear?:Gear}
 type Strike='slash'|'arrow'|'spell'|'ring'
 const riftPoint={x:900,y:535}
 const elementColors=[0xff995f,0x99dfff,0xffd477,0xc785e7,0xffe0a4]
@@ -33,7 +35,7 @@ export class World extends Phaser.Scene {
  target?:Monster
  destination?:Point
  mobs:Monster[]=[]
- loot:Loot[]=[]
+ get loot(){return this.hero.drops[this.hero.zone]??=[]}
  obstacles:Obstacle[]=[]
  cooldowns:number[]=[0,0,0,0,0]
  lastAttack=-10
@@ -46,14 +48,17 @@ export class World extends Phaser.Scene {
  clock=0
  private lastTick=0
  private lastCombat=-10
- private background?:Phaser.GameObjects.Image
  private display?:DisplayResolution
  private portraits!:PortraitSprites
  private heading=1
  private graphics!:Phaser.GameObjects.Graphics
  private battleEffects!:Phaser.GameObjects.Graphics
  private worldText!:WorldText
- private mapCache=new Map<number,Obstacle[]>()
+ private mapCache=new Map<number,ReturnType<typeof drawWorld>>()
+ private awaitingMap?:number
+ private readonly regionStates=new Map<number,{mobs:Monster[];guards:Monster[]}>()
+ private lastFullWarning=-10
+ private lastRoadWarning=-10
  private riftGuards:Monster[]=[]
  private running=false
  private bursts:Burst[]=[]
@@ -112,29 +117,55 @@ export class World extends Phaser.Scene {
 
  }
  applyDetail(){this.display?.select()}
- enter(zone:number,position?:Point,silent=false){
+ resetRegionState(){this.regionStates.clear()}
+ private ensureMap(zone:number){
+  let map=this.mapCache.get(zone)
+  if(!map){map=drawWorld(this,zone);this.mapCache.set(zone,map)}
+  return map
+ }
+ private syncMaps(){
+  const zone=this.hero.zone, left=landNeighbor(zone,-1), right=landNeighbor(zone,1)
+  const limit=navigator.maxTouchPoints>0?2:3
+  const preferred=this.hero.x<WIDTH/2?[left,right]:[right,left]
+  const keep=[zone,...preferred.filter((id):id is number=>id!==undefined&&this.mapCache.has(id))].slice(0,limit)
+  for(const [id,map] of this.mapCache){
+   if(!keep.includes(id)){map.world.destroy();this.textures.remove('map-'+id);this.mapCache.delete(id);continue}
+   map.world.setX(id===left?-WIDTH:id===right?WIDTH:0)
+  }
+  const x=left!==undefined?-WIDTH:0
+  this.cameras.main.setBounds(x,0,WIDTH+(left!==undefined?WIDTH:0)+(right!==undefined?WIDTH:0),HEIGHT)
+  document.querySelector<HTMLElement>('#game')!.dataset.maps=String(this.mapCache.size)
+ }
+ private prefetch(){
+  const current=this.hero.zone
+  const margin=Math.min(WIDTH*.56,this.cameras.main.width/this.cameras.main.zoom/2+150)
+  const direction=this.hero.x<WIDTH/2?-1:1
+  if(Math.min(this.hero.x,WIDTH-this.hero.x)>margin)return
+  const next=landNeighbor(current,direction)
+  if(next===undefined||this.awaitingMap===next||this.mapCache.has(next))return
+  this.awaitingMap=next
+  const prepare=()=>{
+   if(this.awaitingMap!==next)return
+   this.awaitingMap=undefined
+   if(this.hero.zone!==current)return
+   this.ensureMap(next);this.syncMaps()
+  }
+  if(typeof window.requestIdleCallback==='function')window.requestIdleCallback(prepare,{timeout:180})
+  else window.setTimeout(prepare,20)
+ }
+ enter(zone:number,position?:Point,silent=false,shift=0){
+  const camera=this.cameras.main
+  const center={x:camera.scrollX+camera.width/2,y:camera.scrollY+camera.height/2}
   this.hero.zone=zone
   this.portraits.reset()
   this.lastCombat=-10
-  this.background?.destroy()
-  const cached=this.mapCache.get(zone)
-  const map=cached
-   ?{world:this.add.image(0,0,'map-'+zone).setOrigin(0).setDisplaySize(WIDTH,HEIGHT).setDepth(-2),obstacles:cached}
-   :drawWorld(this,zone)
-  this.mapCache.delete(zone)
-  this.mapCache.set(zone,map.obstacles)
-  const mapLimit=navigator.maxTouchPoints>0?1:2
-  if(this.mapCache.size>mapLimit){
-   const oldest=this.mapCache.keys().next().value!
-   this.mapCache.delete(oldest);this.textures.remove('map-'+oldest)
-  }
-  this.background=map.world;this.obstacles=map.obstacles
-  document.querySelector<HTMLElement>('#game')!.dataset.maps=String(this.mapCache.size)
+  this.obstacles=this.ensureMap(zone).obstacles
   const point=position??(safeZone(zone)?spawn:entry)
-  Object.assign(this.hero,point)
-  if(!this.passable(this.hero.x,this.hero.y))Object.assign(this.hero,safeZone(zone)?spawn:entry)
+  this.hero.x=point.x;this.hero.y=point.y
+  if(!this.passable(this.hero.x,this.hero.y,true))Object.assign(this.hero,safeZone(zone)?spawn:entry)
+  this.syncMaps()
   this.destination=undefined;this.target=undefined;this.interaction=undefined;this.interactionPoint=undefined
-  this.riftGuards=[];this.loot=[];this.bursts=[];this.clickMarker=undefined;this.steerSide=1;this.route=[];this.routeGoal=undefined
+  this.bursts=[];this.clickMarker=undefined;this.steerSide=1;this.route=[];this.routeGoal=undefined
   if(this.pet)Object.assign(this.pet,{x:this.hero.x-24,y:this.hero.y+18})
   this.worldText.reset()
   if(safeZone(zone)){
@@ -150,8 +181,16 @@ export class World extends Phaser.Scene {
   if(next>=0)this.label(exit.x,exit.y-96,zones[next][0],'#e7bd86')
   if(zone>=9)this.label(riftPoint.x,riftPoint.y-43,'不穩定的裂隙','#f0b4ff')
   if(!silent)record(this.hero,'visit')
-  this.populate(zone)
-  this.resize();this.explore()
+  const cached=this.regionStates.get(zone)
+  if(cached){this.mobs=cached.mobs;this.riftGuards=cached.guards}
+  else{this.riftGuards=[];this.populate(zone);this.regionStates.set(zone,{mobs:this.mobs,guards:this.riftGuards})}
+  if(shift)camera.centerOn(center.x-shift,center.y)
+  else{
+   this.resize()
+   // A direct teleport can put the opposite edge in view immediately.
+   this.prefetch()
+  }
+  this.explore()
   if(!silent){this.callbacks.message('抵達 '+zones[zone][0]);this.callbacks.refresh()}
  }
  private label(x:number,y:number,text:string,color:string){this.worldText.label({x,y},text,color)}
@@ -179,16 +218,28 @@ export class World extends Phaser.Scene {
    }
   }
  }
- private passable(x:number,y:number){return inside(x,y)&&this.obstacles.every(o=>Math.hypot(o.x-x,o.y-y)>o.r+6)}
+ private passable(x:number,y:number,allowRoad=false){
+  const link=x<24?landNeighbor(this.hero.zone,-1):x>WIDTH-24?landNeighbor(this.hero.zone,1):undefined
+  const corridor=allowRoad&&link!==undefined&&onRoad(y)&&x>-70&&x<WIDTH+70
+  return (inside(x,y)||corridor)&&this.obstacles.every(o=>Math.hypot(o.x-x,o.y-y)>o.r+6)
+ }
  private walk(entity:Point,dx:number,dy:number){
-  const x=entity.x,y=entity.y
-  if(this.passable(entity.x+dx,entity.y))entity.x+=dx
-  if(this.passable(entity.x,entity.y+dy))entity.y+=dy
+  const x=entity.x,y=entity.y, hero=entity===this.hero, nextX=x+dx
+  if(hero&&(nextX<0||nextX>=WIDTH)&&onRoad(y)){
+   const step=crossing(this.hero.zone,this.hero.level,nextX,y)
+   if(step){this.enter(step.zone,step,false,step.shift);return true}
+   const limit=landNeighbor(this.hero.zone,nextX<0?-1:1)
+   if(limit!==undefined&&this.clock-this.lastRoadWarning>2.2){
+    this.lastRoadWarning=this.clock
+    this.callbacks.message('前往 '+zones[limit][0]+' 需要等級 '+zones[limit][1],'warn')
+   }
+  }else if(this.passable(nextX,y,hero))entity.x=nextX
+  if(this.passable(entity.x,entity.y+dy,hero))entity.y+=dy
   return dist(entity,{x,y})>.01
  }
  private direction(x:number,y:number){return (Math.round(Math.atan2(y,x)/(Math.PI/4))+8)%8}
  private go(goal:Point,speed:number,dt:number,reach=10){
-  const passable=(x:number,y:number)=>this.passable(x,y)
+  const passable=(x:number,y:number)=>this.passable(x,y,true)
   if(!this.routeGoal||dist(this.routeGoal,goal)>34||this.clock>=this.routeAt){
    this.routeGoal={x:goal.x,y:goal.y};this.routeAt=this.clock+.48
    const direct=dist(this.hero,goal)<28||clearPath(this.hero,goal,passable)
@@ -222,6 +273,9 @@ export class World extends Phaser.Scene {
    if(near({x:774,y:510},34)){this.approach({x:774,y:510},()=>this.restore());return}
   }
   const [back,next]=zoneRoutes(zone)
+  const west=landNeighbor(zone,-1), east=landNeighbor(zone,1)
+  if(west!==undefined&&(p.x<0||near(entry,53))){this.roadDestination(-1);return}
+  if(east!==undefined&&(p.x>=WIDTH||near(exit,53))){this.roadDestination(1);return}
   if(back>=0&&near(entry,53)){this.approach(entry,()=>this.travel(back,true));return}
   if(next>=0&&near(exit,53)){this.approach(exit,()=>this.travel(next));return}
   if(zone>=9&&near(riftPoint,42)){this.approach(riftPoint,()=>this.activateRift());return}
@@ -233,6 +287,26 @@ export class World extends Phaser.Scene {
   this.target=undefined;this.interaction=undefined;this.interactionPoint=undefined
   this.destination={x:Phaser.Math.Clamp(p.x,26,WIDTH-26),y:Phaser.Math.Clamp(p.y,30,HEIGHT-26)}
   this.routeGoal=undefined;this.clickMarker=this.destination;this.clickUntil=this.clock+.46
+ }
+ walkToRegion(zone:number){
+  if(this.hero.level<zones[zone]?.[1])return false
+  const direction=landNeighbor(this.hero.zone,1)===zone?1:landNeighbor(this.hero.zone,-1)===zone?-1:0
+  if(!direction)return false
+  this.roadDestination(direction)
+  return true
+ }
+ private roadDestination(direction:-1|1){
+  const next=landNeighbor(this.hero.zone,direction)
+  if(next===undefined)return
+  if(this.hero.level<zones[next][1]){
+   this.callbacks.message('需要等級 '+zones[next][1],'warn')
+   return
+  }
+  const approach={x:direction<0?29:WIDTH-29,y:roadY}
+  this.approach(approach,()=>{
+   this.routeGoal=undefined
+   this.destination={x:direction<0?-12:WIDTH+12,y:roadY}
+  })
  }
  travel(zone:number,back=false){
   if(!zones[zone])return false
@@ -375,15 +449,28 @@ export class World extends Phaser.Scene {
   const point=this.loot.filter(item=>dist(this.hero,item)<310).sort((a,b)=>dist(this.hero,a)-dist(this.hero,b))[0]
   if(point)this.approach(point,()=>this.collect(point))
  }
- private collect(item:Loot){
-  const index=this.loot.indexOf(item)
-  if(index<0)return
-  this.loot.splice(index,1)
-  this.hero.gold+=item.gold;this.hero.items[item.material]++
-  if(item.material==='shard')record(this.hero,'shard')
-  if(item.gear)this.hero.bag.push(item.gear)
-  this.callbacks.message('拾取 '+item.gold+' 金幣'+(item.gear?'與裝備':''),item.gear&&item.gear.grade>=2?'gold':'')
-  sound('loot');this.callbacks.refresh()
+ private autoPickup(){
+  if(!this.hero.pickup.enabled||this.dead)return
+  let changed=false
+  for(const item of [...this.loot]){
+   if(dist(this.hero,item)>this.hero.pickup.range||!canCollect(this.hero,item,true))continue
+   changed=this.collect(item,true)||changed
+  }
+  if(changed)this.callbacks.refresh()
+ }
+ private collect(item:Drop,auto=false){
+  const result=collectDrop(this.hero,item,auto)
+  if(result.full&&this.clock-this.lastFullWarning>2){
+   this.lastFullWarning=this.clock
+   this.callbacks.message('背包已滿，裝備留在地面','warn')
+  }
+  if(!result.gold&&!result.material&&!result.gear)return false
+  if(result.material==='shard')record(this.hero,'shard')
+  const parts=[result.gold?result.gold+' 金幣':'',result.material?'道具':'',result.gear?'裝備':''].filter(Boolean)
+  this.callbacks.message('拾取 '+parts.join('、'),result.gear&&result.gear.grade>=2?'gold':'')
+  sound('loot')
+  if(!auto)this.callbacks.refresh()
+  return true
  }
  private openChest(){
   const zone=this.hero.zone
@@ -531,8 +618,8 @@ export class World extends Phaser.Scene {
     if(dx)this.facing=dx>0?1:-1
    }else if(!this.interactNear()){
     if(this.auto&&!this.target&&!this.destination){
-     const loot=this.loot.find(item=>dist(hero,item)<125)
-     if(loot)this.approach(loot,()=>this.collect(loot))
+     const drop=this.hero.pickup.enabled?this.loot.find(item=>dist(hero,item)<this.hero.pickup.range+185&&canCollect(hero,item,true)):undefined
+     if(drop)this.approach(drop,()=>{if(this.collect(drop,true))this.callbacks.refresh()})
      else this.target=this.nearest(460)
     }
     if(this.target){
@@ -558,6 +645,7 @@ export class World extends Phaser.Scene {
     if(!this.dead)hero.hp=Math.min(stats.hp,hero.hp+(safeZone(hero.zone)?5:.25))
     hero.mp=Math.min(stats.mp,hero.mp+(safeZone(hero.zone)?4:.65))
     this.explore()
+    this.autoPickup()
    }
    if(this.target?.hp)this.lastCombat=this.clock
    soundtrack(this.boss?'boss':this.clock-this.lastCombat<3?'battle':safeZone(hero.zone)?'village':
@@ -566,6 +654,7 @@ export class World extends Phaser.Scene {
   const camera=this.cameras.main
   const cx=camera.scrollX+camera.width/2,cy=camera.scrollY+camera.height/2
   camera.centerOn(Phaser.Math.Linear(cx,this.hero.x,1-Math.exp(-dt*10)),Phaser.Math.Linear(cy,this.hero.y-15,1-Math.exp(-dt*10)))
+  this.prefetch()
   this.renderWorld()
  }
  navigateQuest(){
@@ -615,6 +704,7 @@ export class World extends Phaser.Scene {
    return {definition,home,...home,hp:max,max,hitAt:this.clock+1,sleep:0,frozen:0,angry:true,hurt:0}
   })
   this.mobs=[...this.mobs.filter(m=>Number.isFinite(m.sleep)),...this.riftGuards]
+  this.regionStates.set(this.hero.zone,{mobs:this.mobs,guards:this.riftGuards})
   this.callbacks.message('裂隙開啟！擊退兩名守衛','warn');sound('magic')
  }
  private resolveRift(){
@@ -738,7 +828,20 @@ export class World extends Phaser.Scene {
    g.fillStyle(0x120e16,.49).fillEllipse(hero.x,hero.y+1,43,13)
    this.portraits.draw('hero',name,hero.x,hero.y,87,pose,this.previewFrames,this.heading)
    const weapon=hero.worn[0], armor=hero.worn[3]
-   if(armor&&armor.grade>=3)g.lineStyle(2,colorNumber(qualityColors[armor.grade]),.6).strokeEllipse(hero.x,hero.y+2,46,16)
+   if(armor&&armor.grade>=2){
+    const tint=colorNumber(qualityColors[armor.grade])
+    g.lineStyle(2,tint,.48).strokeEllipse(hero.x,hero.y+2,46,16)
+    g.fillStyle(tint,.11).fillEllipse(hero.x+this.facing*9,hero.y-43,28,48)
+    if(armor.plus>=4)for(let i=0;i<3;i++){
+     const a=this.previewFrames*2+i*Math.PI*2/3
+     g.fillStyle(tint,.64).fillCircle(hero.x+Math.cos(a)*29,hero.y-5+Math.sin(a)*9,1.35)
+    }
+   }
+   if(pose==='cast'){
+    const color=jobs[hero.job].color, t=this.previewFrames*8
+    g.lineStyle(1.5,color,.52).strokeEllipse(hero.x,hero.y-16,53,19)
+    for(let i=0;i<4;i++)g.fillStyle(color,.63).fillCircle(hero.x+Math.cos(t+i*1.57)*24,hero.y-17+Math.sin(t+i*1.57)*8,2)
+   }
    if(weapon&&(weapon.plus>=4||weapon.element!==undefined)){
     const c=weapon.element!==undefined&&weapon.identified?elementColors[weapon.element]:colorNumber(qualityColors[weapon.grade])
     const x=hero.x+this.facing*21,y=hero.y-27+Math.sin(this.previewFrames*12)*5

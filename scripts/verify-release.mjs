@@ -19,7 +19,7 @@ for(let attempt=0;attempt<6;attempt++){
   assert.equal(release.version,expectedVersion)
   assert.ok((await (await fetchFresh('index.html')).text()).includes('content="'+release.id+'"'))
   assert.ok((await (await fetchFresh('sw.js')).text()).includes(release.id))
-  for(const file of ['art-v22/knight.webp','art-v22/knight-motion.json','score-v22/village.m4a']){
+  for(const file of ['art-v22/knight.webp','art-v22/knight-motion.json','art-v30/items.webp','score-v22/village.m4a']){
    const response=await fetchFresh(file)
    assert.ok((await response.arrayBuffer()).byteLength>0)
   }

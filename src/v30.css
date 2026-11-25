@@ -1,0 +1,95 @@
+#app {
+ --ui:calc(15px * var(--read-scale));
+ --important:calc(16px * var(--read-scale));
+ --reading:calc(15px * var(--read-scale));
+ --task:calc(15px * var(--read-scale));
+ --title:calc(21px * var(--read-scale));
+ --notice:calc(20px * var(--read-scale));
+}
+.topbar {background:linear-gradient(105deg,#221b18,#141217 70%);}
+.brand strong {font-size:var(--title)}
+.brand small {font-size:11px}
+.player-card {min-width:184px;max-width:min(37vw,235px);gap:8px;padding:6px 7px}
+.player-title,.player-job,.meter b {font-size:var(--ui)}
+.portrait {width:39px;height:51px}
+.meter {min-height:18px}
+.map-card,.world-side {width:187px}
+.map-title,.tracker-head {gap:3px;min-height:30px}
+.map-title .small-icon,.tracker-head .small-icon {width:27px;height:28px;min-height:28px}
+.map-view canvas {height:74px}
+.world-side,#app[data-text-size="large"] .world-side {top:175px}
+#app[data-map-folded="true"] .world-side {top:62px}
+.folded .map-view,.folded .map-foot,.folded #tracker {display:none}
+.map-card.folded {padding-bottom:4px}
+.side-nav,#app[data-text-size="large"] .side-nav {grid-template-columns:repeat(3,47px);gap:4px}
+.side-button {height:45px;min-height:45px;padding:3px;font-size:var(--ui);line-height:1.12}
+.tracker {min-height:0}
+.tracker-name,.tracker-detail {font-size:var(--ui)}
+.tracker-head {font-size:var(--ui)}
+.world-text {font-size:calc(13px * var(--read-scale));padding:2px 5px;line-height:1.25}
+.world-text.focus {font-size:calc(14px * var(--read-scale))}
+.world-text.damage {font-size:var(--important)}
+.world-text.critical {font-size:var(--notice)}
+.dialog h2,.title-modal h1 {font-size:var(--title)}
+.title-modal h1 {font-size:clamp(32px,4vw,48px)}
+.dock-panel {
+ display:flex;align-items:flex-start;justify-content:flex-end;
+ padding:8px max(8px,env(safe-area-inset-right)) 8px max(8px,env(safe-area-inset-left));
+ pointer-events:none;background:transparent;isolation:isolate;
+}
+.dock-panel .dialog {
+ pointer-events:auto;
+ width:min(547px,43vw);
+ max-height:100%;
+ padding:10px 12px;
+ border:1px solid #a58a62;
+ background:linear-gradient(150deg,#392a22,#1a161ceb 64%);
+ box-shadow:0 10px 40px #07060880,inset 0 0 0 1px #e7bd7d28;
+}
+.dock-panel .dialog-head {display:flex;align-items:center;margin-bottom:7px;gap:4px}
+.panel-controls {display:flex;gap:3px;margin-left:auto}
+.panel-controls .small-icon {min-height:38px;width:38px}
+.dock-panel.collapsed .dialog,.dock-panel.minimized .dialog {width:auto;min-width:190px;padding:4px 6px}
+.dock-panel.collapsed .dialog-head,.dock-panel.minimized .dialog-head {margin:0}
+.dock-panel.minimized {justify-content:center;align-items:flex-end;padding-bottom:7px}
+.dock-panel.minimized [data-action="panel-collapse"],.dock-panel.collapsed [data-action="panel-minimize"] {opacity:.8}
+.dock-panel .item-row {gap:5px;padding:6px}
+.dock-panel .item-row .button {min-height:35px;padding:3px 6px;font-size:var(--ui)}
+.dock-panel .row-tools input {min-height:35px;width:58px}
+.dock-panel .button {font-size:var(--ui);min-height:40px}
+.bag-summary {display:flex;align-items:center;justify-content:space-between;gap:6px;margin-bottom:7px}
+.gear-label {display:inline-flex;align-items:center;gap:6px;vertical-align:middle}
+.item-art {
+ display:inline-block;width:29px;height:29px;flex:none;border:1px solid #aa845b75;border-radius:5px;
+ background-color:#181319;box-shadow:inset 0 0 8px #b9924430;
+ background-image:var(--inventory-atlas);
+ background-size:400% 300%;background-position:var(--atlas-x) var(--atlas-y);
+ background-repeat:no-repeat
+}
+.road-map {display:grid;gap:6px;padding:7px;background:#211c20;border:1px solid #725837}
+.road-map>div {display:flex;flex-wrap:wrap;align-items:center;gap:3px}
+.road-map span {padding:1px 4px;color:#e2caac}
+.road-map .here {background:#654732;color:#ffeece}
+.road-map b {color:#96794d}
+.pickup-groups {display:flex;gap:7px;flex-wrap:wrap}
+.log {padding:6px 8px;min-height:auto}
+.log-head,#log-lines {font-size:var(--ui)}
+.toast {font-size:var(--notice)}
+@media (max-height:550px) and (orientation:landscape){
+ .player-card {min-width:152px;padding:5px;gap:5px}
+ .portrait {width:32px;height:41px}
+ .map-card {width:154px;padding:4px}
+ .map-view canvas {height:39px}
+ .compact-nav button {font-size:var(--ui);min-height:43px}
+ .dock-panel .dialog {width:min(440px,46vw);padding:7px 8px}
+ .dock-panel .dialog h2 {font-size:var(--title)}
+}
+@media (max-width:620px) and (orientation:portrait){
+ .map-card {width:137px}
+ .map-view canvas {height:49px}
+ .player-card {min-width:0;width:calc(100% - 145px);max-width:none}
+ .world-side,#app[data-text-size="large"] .world-side {width:auto;top:129px}
+ .side-nav,#app[data-text-size="large"] .side-nav {grid-template-columns:repeat(2,47px)}
+ .dock-panel {justify-content:center;align-items:flex-start}
+ .dock-panel .dialog {width:min(100%,480px)}
+}

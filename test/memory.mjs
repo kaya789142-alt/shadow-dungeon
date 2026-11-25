@@ -35,11 +35,11 @@ try{
   await button('開啟區域地圖').click()
   await page.locator(`[data-action="travel-to:${zone}"]`).click()
   await page.waitForFunction(zone=>JSON.parse(localStorage.getItem('shadow-dungeon.v1')).zone===zone,zone)
-  assert.equal(await page.locator('#game').getAttribute('data-maps'),'1')
+  assert.ok(Number(await page.locator('#game').getAttribute('data-maps'))<=2)
   peak=Math.max(peak,await heap())
  }
  const after=await heap()
  assert.ok(after-before<8*1024*1024,'JavaScript heap should stabilize after travelling')
  console.log('十次傳送後 JS heap／起始／峰值（MiB）',...[after,before,Math.max(peak,after)].map(n=>(n/1024/1024).toFixed(2)))
- console.log('每次傳送皆最多留存 1 張地圖紋理。這是瀏覽器 JS heap 取樣。')
+ console.log('每次傳送皆最多留存 2 張地圖紋理。這是瀏覽器 JS heap 取樣。')
 }finally{await browser.close()}

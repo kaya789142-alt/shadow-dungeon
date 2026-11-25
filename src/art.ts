@@ -1,9 +1,10 @@
 import Phaser from 'phaser'
+import { landNeighbor, onRoad, roadY, regionWidth, regionHeight } from './overworld'
 import { safeZone, zones } from './data'
 
 import { cobble, roofMaterial } from './terrain-material'
 
-export const WIDTH=1500, HEIGHT=1024, TILE=32
+export const WIDTH=regionWidth, HEIGHT=regionHeight, TILE=32
 export type Obstacle={x:number;y:number;r:number}
 export const entry={x:115,y:540}
 export const exit={x:1380,y:535}
@@ -114,7 +115,8 @@ export function drawWorld(scene:Phaser.Scene,zone:number){
  const has=(name:string)=>scene.textures.exists(name)
  const settlement=safeZone(zone)
  const organic=settlement||zone===1||zone===2||zone===10
- const path=(x:number,y:number)=>Math.abs(y-535-Math.sin(x/165)*12)<(settlement?52:32)
+ const path=(x:number,y:number)=>Math.min(x,WIDTH-x)<172?onRoad(y):
+  Math.abs(y-roadY-Math.sin(x/165)*12*Math.min(1,(Math.min(x,WIDTH-x)-172)/104))<(settlement?52:36)
  const plaza=(x:number,y:number)=>settlement&&x>486&&x<1110&&y>290&&y<727
  ink(g,dark,0,0,WIDTH,HEIGHT)
  for(let y=0;y<HEIGHT;y+=16)for(let x=0;x<WIDTH;x+=16){
@@ -260,6 +262,20 @@ export function drawWorld(scene:Phaser.Scene,zone:number){
    c.fillRect(x,y,1+detail()*2,.6+detail()*1.4)
   }
  }
+ // Both sides meet with the same trail materials, blending their local palettes inward.
+ for(const direction of [-1,1] as const){
+  if(landNeighbor(zone,direction)===undefined)continue
+  const edge=direction<0?0:WIDTH, inner=edge-direction*112
+  for(const [top,height,rgb] of [[0,roadY-48,'43,51,43'],
+   [roadY-48,96,'91,81,68'],[roadY+48,HEIGHT-roadY-48,'43,51,43']] as const){
+   const blend=c.createLinearGradient(edge,0,inner,0)
+   blend.addColorStop(0,'rgba('+rgb+',1)')
+   blend.addColorStop(.44,'rgba('+rgb+',.56)')
+   blend.addColorStop(1,'rgba('+rgb+',0)')
+   c.fillStyle=blend
+   c.fillRect(Math.min(edge,inner),top,112,height)
+  }
+ }
  c.globalAlpha=.58
  if(!organic&&zone!==3){
   c.lineCap='round'
@@ -270,6 +286,9 @@ export function drawWorld(scene:Phaser.Scene,zone:number){
    c.lineTo(x+detail()*14,y+detail()*8-4);c.lineTo(x+19,y-2+detail()*12)
    c.strokeStyle=i%2?'#14151f69':'#9aacc32a';c.lineWidth=detail()*1.1+.4;c.stroke()
   }
+ }
+ for(const edge of [0,WIDTH-44]){
+  for(let i=0;i<6;i++)cobble(c,edge+3,roadY-44+i*15,42,15,.86,detail)
  }
  for(let y=473;y<599;y+=9)for(let x=-10+(Math.floor(y/9)%2)*12;x<WIDTH;x+=24){
   if(!path(x+12,y+4)||settlement&&x>480&&x<1120||x<177||x>1337)continue

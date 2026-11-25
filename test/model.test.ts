@@ -126,3 +126,41 @@ test('V2.1 graphics presets respect DPR, backing-pixel budget and adaptive fallb
  assert.equal(current.preferences.size,1.35)
  assert.equal(current.bag[0].uid,old.bag[0].uid)
 })
+
+test('walkable boundaries preserve fractional local position and keep the harbor a separate chain',async()=>{
+ const {crossing,landNeighbor}=await import('../src/overworld.ts')
+ assert.deepEqual(crossing(0,1,1504.5,535),{zone:1,x:4.5,y:535,shift:1500})
+ assert.deepEqual(crossing(1,1,-3.5,552),{zone:0,x:1496.5,y:552,shift:-1500})
+ assert.equal(crossing(1,1,1501,535),undefined)
+ assert.equal(crossing(1,50,1501,650),undefined)
+ assert.equal(landNeighbor(8,-1),undefined)
+})
+test('partial pickup keeps full-bag and filtered gear on the ground without duplicating rewards',async()=>{
+ const {bagLimit,collectDrop}=await import('../src/inventory.ts')
+ const hero=createHero('拾取驗證',0)
+ while(hero.bag.length<bagLimit)hero.bag.push(makeGear(4,0,1))
+ const gear=makeGear(3,3,5)
+ const drop={x:805,y:520,gold:31,material:'red' as const,gear}
+ hero.drops[0]=[drop]
+ assert.deepEqual(collectDrop(hero,drop,true),{gold:31,material:'red',gear:undefined,full:true})
+ assert.equal(hero.gold,211)
+ assert.equal(hero.items.red,9)
+ assert.equal(hero.drops[0][0].gear?.uid,gear.uid)
+ assert.equal(collectDrop(hero,drop,true).gold,0)
+ const migrated=decodeSave(JSON.stringify(hero))
+ migrated.bag.pop()
+ migrated.pickup.minGrade=4
+ assert.equal(collectDrop(migrated,migrated.drops[0][0],true).gear,undefined)
+ assert.equal(collectDrop(migrated,migrated.drops[0][0]).gear?.uid,gear.uid)
+ assert.equal(migrated.drops[0].length,0)
+ assert.equal(migrated.bag.length,bagLimit)
+ assert.equal(migrated.gold,211)
+})
+test('ground gear cannot duplicate a held UID and locked gear cannot risk destruction',()=>{
+ const hero=createHero('鎖定驗證',0), gear=hero.bag[0]
+ gear.plus=6
+ hero.locks=[gear.uid]
+ assert.match(upgrade(hero,gear,false,false,true),/保護卷軸/)
+ hero.drops[0]=[{x:100,y:100,gold:0,gear:{...gear}}]
+ assert.throws(()=>decodeSave(JSON.stringify(hero)),/重複/)
+})

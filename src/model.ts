@@ -1,11 +1,13 @@
 import { achievements, jobs, materialNames, quests, rules, zones } from './data.ts'
 import type { Detail } from './display.ts'
 import type { Gear, Material } from './data.ts'
+import { categories, defaultPickup } from './inventory.ts'
+import type { Category, Drop } from './inventory.ts'
 
 export const spawn = {x:805,y:552}
 export const materials = Object.keys(materialNames) as Material[]
 export const day = () => new Intl.DateTimeFormat('sv-SE').format(new Date())
-export const defaultPreferences={size:1.15,textRev:2,detail:'high' as Detail,click:'move' as 'move'|'interact',shake:true,ambience:.35}
+export const defaultPreferences={size:1.15,textRev:3,detail:'high' as Detail,click:'move' as 'move'|'interact',shake:true,ambience:.35}
 export type Hero = ReturnType<typeof createHero>
 export function createHero(name:string, job:number) {
  return {
@@ -16,7 +18,7 @@ export function createHero(name:string, job:number) {
   skills:[1,0,0,0,0], quests:{move:0,potion:0,gear:0,forge:0,learn:0} as Record<string,number>,
   claims:{} as Record<string,boolean>, daily:day(), bestiary:{} as Record<number,number>,
   explored:{} as Record<number,number[]>, chests:[] as number[], hidden:[] as number[], morphs:[] as number[], stats:{} as Record<string,number>,
-  title:'', music:.3, sfx:.65, stock:{} as Record<string,number>, tracking:'move', preferences:{...defaultPreferences}
+  title:'', music:.3, sfx:.65, stock:{} as Record<string,number>, tracking:'move', locks:[] as string[], drops:{} as Record<number,Drop[]>, pickup:{...defaultPickup,groups:[...categories]}, coordinates:'region-local' as const, preferences:{...defaultPreferences}
  }
 }
 export function makeGear(slot:number,grade:number,tier:number,job?:number,random=Math.random):Gear {
@@ -63,6 +65,7 @@ export function upgradeInfo(gear:Gear,blessed:boolean){
 export function upgrade(hero:Hero,gear:Gear,blessed=false,protectedItem=false,confirmed=false,random=Math.random){
  if(gear.plus>=rules.maxUpgrade)return '已達強化上限'
  const info=upgradeInfo(gear,blessed)
+ if(info.risk&&hero.locks.includes(gear.uid)&&!protectedItem)return '已鎖定的裝備需使用保護卷軸'
  if(info.risk&&!confirmed)return '請確認高風險強化'
  if(hero.items[info.material]<1||hero.gold<info.price||(protectedItem&&hero.items.protect<1))return '金幣或卷軸不足'
  hero.gold-=info.price
@@ -127,15 +130,32 @@ export function decodeSave(json:string):Hero {
   !Array.isArray(value.hidden)||!value.hidden.every(v=>integer(v,0,zones.length-1))||
   !Array.isArray(value.morphs)||!value.morphs.every(v=>integer(v,0,5))||
   typeof value.daily!=='string'||typeof value.title!=='string'||typeof value.tracking!=='string')throw new Error('存檔格式或版本無效')
- const allGear=[...value.bag,...value.vault,...Object.values(value.worn)] as Gear[]
+ const drops=value.drops===undefined?{}:value.drops
+ if(!object(drops)||!Object.entries(drops).every(([zone,items])=>String(Number(zone))===zone&&integer(Number(zone),0,zones.length-1)&&Array.isArray(items)&&items.every(drop=>
+  object(drop)&&finite(drop.x,0,1500)&&finite(drop.y,0,1024)&&integer(drop.gold,0,1e9)&&
+  (drop.material===undefined||materials.includes(drop.material as Material))&&(drop.gear===undefined||validGear(drop.gear)))))
+  throw new Error('地面戰利品格式無效')
+ const ground=Object.values(drops).flat() as unknown as Drop[]
+ const allGear=[...value.bag,...value.vault,...Object.values(value.worn),...ground.flatMap(drop=>drop.gear?[drop.gear]:[])] as Gear[]
  if(new Set(allGear.map(g=>g.uid)).size!==allGear.length)throw new Error('存檔含重複的裝備')
  const hero=value as unknown as Hero
  hero.name=hero.name.slice(0,16)
  hero.items.blink??=0
+ hero.coordinates='region-local'
+ hero.drops=drops as Hero['drops']
+ const allowedLocks=new Set([...materials,...allGear.map(gear=>gear.uid)])
+ hero.locks=Array.isArray(value.locks)?[...new Set(value.locks.filter((id):id is string=>typeof id==='string'&&allowedLocks.has(id)))]:[]
+ const pickup=object(value.pickup)?value.pickup:{}
+ hero.pickup={
+  enabled:typeof pickup.enabled==='boolean'?pickup.enabled:defaultPickup.enabled,
+  range:finite(pickup.range,65,165)?pickup.range:defaultPickup.range,
+  minGrade:integer(pickup.minGrade,0,5)?pickup.minGrade:defaultPickup.minGrade,
+  groups:Array.isArray(pickup.groups)?[...new Set(pickup.groups.filter((part):part is Category=>categories.includes(part)))]:[...categories]
+ }
  const prefs=object(value.preferences)?value.preferences:{}
  hero.preferences={
-  size:finite(prefs.size,1,1.4)&&(prefs.textRev===2||prefs.size>1)?prefs.size:defaultPreferences.size,
-  textRev:2,
+  size:finite(prefs.size,1,1.4)&&(prefs.textRev===3||prefs.textRev===2)?prefs.size:defaultPreferences.size,
+  textRev:3,
   detail:prefs.detail==='balanced'||prefs.detail==='ultra'?prefs.detail:'high',
   click:prefs.click==='interact'?'interact':'move',
   ambience:finite(prefs.ambience,0,1)?prefs.ambience:defaultPreferences.ambience,

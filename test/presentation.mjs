@@ -28,7 +28,7 @@ try{
  assert.ok(art.some(url=>url.endsWith('/knight-motion.json')))
  assert.ok(art.some(url=>url.endsWith('/fountain.webp')))
  assert.deepEqual(requests,[],'initial load must not request music')
- assert.equal(await page.locator('#app').getAttribute('data-text-size'),'large')
+ assert.equal(await page.locator('#app').getAttribute('data-text-size'),'standard')
  assert.ok(await size(page)>1.4,'iPad backing buffer must exceed CSS resolution')
  await button(page,'開始冒險').tap()
  await musicReady(page,'title')
@@ -36,8 +36,8 @@ try{
  await button(page,'進入燼燈村').tap()
  await musicReady(page,'village')
  const visible=page.locator('#world-text .world-text').filter({hasText:/^藥水商人$/})
- assert.equal(await visible.evaluate(node=>getComputedStyle(node).fontSize),'22px')
- assert.equal(await page.locator('.player-title').evaluate(node=>getComputedStyle(node).fontSize),'22px')
+ assert.equal(await visible.evaluate(node=>getComputedStyle(node).fontSize),'13px')
+ assert.equal(await page.locator('.player-title').evaluate(node=>getComputedStyle(node).fontSize),'15px')
  const perf=await page.evaluate(()=>new Promise(resolve=>{
   const start=performance.now()
   let frames=0
@@ -57,8 +57,8 @@ try{
  assert.equal(await size(page),1)
  await page.getByLabel('畫質').selectOption('ultra')
  assert.ok(await size(page)>1.4)
- assert.equal(await page.locator('#app').getAttribute('data-text-size'),'largest')
- const title=await page.getByText('暗影地下城 V2.2',{exact:true}).last()
+ assert.equal(await page.locator('#app').getAttribute('data-text-size'),'large')
+ const title=await page.getByText('暗影地下城 V3.0',{exact:true}).last()
  await title.scrollIntoViewIfNeeded()
  assert.ok(await title.isVisible())
  await button(page,'關閉視窗').tap()
@@ -88,7 +88,7 @@ try{
   await page.reload()
   await button(page,'繼續冒險').tap()
   await musicReady(page,clip)
-  assert.equal(await page.locator('#game').getAttribute('data-maps'),'1')
+  assert.ok(Number(await page.locator('#game').getAttribute('data-maps'))<=2)
  }
  assert.deepEqual(errors,[])
  const failed=await browser.newContext({serviceWorkers:'block'})
@@ -101,5 +101,5 @@ try{
  assert.equal(await failedPage.evaluate(()=>localStorage.getItem('shadow-dungeon.v1')),existing)
  await failed.close()
 
- console.log('iPad 模擬：Retina、特大字體、全螢幕、NPC 觸控、首頁／村莊／森林／墓園／地下城／戰鬥／魔王配樂')
+ console.log('iPad 模擬：Retina、大字體、全螢幕、NPC 觸控、首頁／村莊／森林／墓園／地下城／戰鬥／魔王配樂')
 }finally{await browser.close()}

@@ -1,4 +1,5 @@
 const glyphs:Record<string,string>={
+ minus:'<path d="M5 12h14"/>',
  crest:'<path d="M12 2 21 7v10l-9 5-9-5V7zM12 6v12M8 10l4-4 4 4m-8 4 4 4 4-4"/>',
  sword:'<path d="m14.5 17.5 3 3m-6-6 8-8 1-4-4 1-8 8m-3 0 6 6M3 21l4-4"/>',
  shield:'<path d="M12 22s8-4 8-11V5l-8-3-8 3v6c0 7 8 11 8 11Zm0-15v9m-4-4h8"/>',

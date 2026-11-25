@@ -48,6 +48,7 @@ export function trackRelease(commitSave:()=>boolean,onChanged:()=>void){
   document.addEventListener('visibilitychange',check)
   window.addEventListener('online',check)
   window.addEventListener('pageshow',check)
+  window.addEventListener('focus',check)
   window.setInterval(check,60_000)
   check()
  }).catch(()=>{})

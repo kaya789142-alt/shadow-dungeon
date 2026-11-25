@@ -47,15 +47,22 @@ export class PortraitSprites {
  private images=new Map<object|string,Phaser.GameObjects.Image>()
  private drawn=new Set<object|string>()
  private feet:Phaser.GameObjects.Image[]=[]
+ private poses=new Map<object|string,{pose:Pose;since:number}>()
  constructor(private scene:Phaser.Scene){}
  begin(){this.drawn.clear();for(const foot of this.feet)foot.setVisible(false)}
  end(){for(const [key,image] of this.images)if(!this.drawn.has(key))image.setVisible(false)}
- reset(){for(const image of [...this.images.values(),...this.feet])image.destroy();this.images.clear();this.feet=[]}
+ reset(){for(const image of [...this.images.values(),...this.feet])image.destroy();this.images.clear();this.poses.clear();this.feet=[]}
  draw(key:object|string,name:string,x:number,y:number,height:number,pose:Pose,time:number,direction:number){
+  let state=this.poses.get(key)
+  if(!state||state.pose!==pose){state={pose,since:time};this.poses.set(key,state)}
+  const elapsed=Math.max(0,time-state.since)
+  const stroke=Math.sin(Math.min(1,elapsed/.29)*Math.PI)
+  const recoil=Math.max(.12,1-elapsed*4.4)
+  const fall=Math.min(1,elapsed*6)
   const walking=pose==='run'||pose==='walk'
   const rear=direction>=5&&direction<=7&&adventurers.includes(name)
   const frame=name==='knight'&&!rear?(walking?Math.floor(time*(pose==='run'?11:7))%2?'stride-a':'stride-b':
-   pose==='attack'?'strike':pose==='hurt'?'recoil':pose==='dead'?'fall':'__BASE'):'__BASE'
+   pose==='attack'&&elapsed>.045?'strike':pose==='hurt'?'recoil':pose==='dead'?'fall':'__BASE'):'__BASE'
   const authored=frame!=='__BASE'
   const texture=authored?'knight-motion':rear?name+'-back':name
   let image=this.images.get(key)
@@ -75,9 +82,9 @@ export class PortraitSprites {
   const step=moving?Math.sin(cycle):0
   const swell=pose==='idle'?Math.sin(time*3)*.6:0
   const stretch=pose==='hurt'?.95:1
-  const rise=pose==='cast'?Math.sin(time*19)*2-3:moving?-Math.abs(step)*2.2:swell
-  const lunge=pose==='attack'?facing*6:pose==='hurt'?-facing*3:step*1.2
-  const angle=pose==='dead'?-facing*77:pose==='attack'?facing*12:pose==='hurt'?-facing*9:step*2.1
+  const rise=pose==='cast'?-stroke*7:moving?-Math.abs(step)*2.2:swell
+  const lunge=pose==='attack'?facing*stroke*12:pose==='hurt'?-facing*recoil*6:step*1.2
+  const angle=pose==='dead'?-facing*fall*77:pose==='attack'?facing*stroke*15:pose==='hurt'?-facing*recoil*12:step*2.1
   const narrow=direction===2||direction===6?.86:direction===0||direction===4?.94:1
   const walk=!authored&&key==='hero'&&moving&&adventurers.includes(name)
   const cut=Math.round(sourceHeight*.80)

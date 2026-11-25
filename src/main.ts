@@ -1,6 +1,6 @@
 import Phaser from 'phaser'
 import '@fontsource-variable/noto-sans-tc'
-import { achievementTitles, attributes, createHero, decodeSave, expNeeded, gearPower, load, makeGear, makeRelic, materials, record, rollover, save, spawn, upgrade, upgradeInfo } from './model'
+import { achievementTitles, attributes, createHero, decodeSave, expNeeded, load, makeGear, makeRelic, materials, record, rollover, save, spawn, upgrade, upgradeInfo } from './model'
 import { achievements, allMonsters, elements, gearName, jobs, materialNames, morphs, pets, quality, qualityColors, quests, rules, safeZone, slots, vendors, zoneRoutes, zones } from './data'
 import type { Gear, Material, Quest } from './data'
 import { entry, exit, HEIGHT, WIDTH } from './art'
@@ -12,9 +12,14 @@ import './style.css'
 import './v2.css'
 import './v21.css'
 import './v22.css'
+import './v30.css'
+import { bagLimit, categories, categoryNames, compatibleGear, fullBag, gearCategory, gearLocked, itemCategory, jobRequirement, materialLocked, sortBag } from './inventory'
+import type { Category } from './inventory'
+import { landNeighbor } from './overworld'
 import { release, releaseDate, trackRelease, versionLabel } from './release'
 
 const app=document.querySelector<HTMLElement>('#app')!
+app.style.setProperty('--inventory-atlas',`url(${new URL(import.meta.env.BASE_URL+'art-v30/items.webp',document.baseURI).href})`)
 const select=<T extends HTMLElement=HTMLElement>(selector:string)=>document.querySelector<T>(selector)!
 const escape=(value:string)=>value.replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]!))
 const nav=[['bag','背包'],['shield','裝備'],['skill','技能'],['quest','任務'],['shop','商店'],['settings','設定']]
@@ -39,12 +44,12 @@ app.innerHTML=`
     </span>
    </button>
    <div id="boss" class="boss-bar" hidden><div id="boss-name"></div><span class="meter health"><i id="boss-fill"></i></span></div>
-   <aside class="map-card"><div class="map-title">${icon('map',16)}<strong id="map-name">燼燈村</strong>${action('travel','區域地圖',icon('expand',14),'small-icon')}</div>
+   <aside class="map-card"><div class="map-title">${icon('map',16)}<strong id="map-name">燼燈村</strong>${action('travel','區域地圖',icon('expand',14),'small-icon')}${action('fold-map','收合小地圖',icon('minus',14),'small-icon')}</div>
     <button class="map-view" data-action="travel" aria-label="開啟區域地圖"><canvas id="minimap" width="180" height="110"></canvas><span class="north">N</span></button>
     <div class="map-foot"><span id="map-level"><i></i>安全區域</span><span id="map-progress">探索 0%</span></div>
    </aside>
   </div>
-  <aside class="world-side"><div class="tracker"><div class="tracker-head">${icon('quest',17)}<strong>任務追蹤</strong>${action('quest','開啟任務',icon('chevron',15),'small-icon')}</div><div id="tracker"></div></div>
+  <aside class="world-side"><div class="tracker"><div class="tracker-head">${icon('quest',17)}<strong>任務追蹤</strong>${action('quest','開啟任務',icon('chevron',15),'small-icon')}${action('fold-tracker','收合任務追蹤',icon('minus',14),'small-icon')}</div><div id="tracker"></div></div>
    <nav class="side-nav" aria-label="遊戲選單">${nav.map(([key,label])=>action(key,label,icon(key,19)+`<span>${label}</span>`,'side-button')).join('')}</nav>
   </aside>
   <div class="world-bottom">
@@ -69,6 +74,8 @@ const storedHero=load()
 let hero=storedHero??createHero('無名旅人',0)
 let hasSave=!!storedHero
 let panel=''
+let panelMode:'open'|'collapsed'|'minimized'='open'
+let bagTab:'all'|Category='all'
 let jobIndex=0
 let previousFocus:HTMLElement|null=null
 let chosenGear=''
@@ -81,7 +88,7 @@ let confirmRisk=false
 let titleState:'title'|'create'|'play'='title'
 const logs:{text:string;style:string}[]=[{text:'歡迎來到燼燈村，冒險者。',style:'gold'},{text:'點擊地面探索，或使用方向鍵移動。',style:''}]
 const world=new World(hero,{
- message, npc:openNpc, refresh:()=>{paint();if(panel)renderPanel();if(titleState==='play')storeProgress()}, death:()=>openPanel('death'),failed:bootError,ready:()=>{paint();renderPanel()}
+ message, npc:openNpc, refresh:()=>{paint();if(panel&&panelMode==='open')renderPanel();if(titleState==='play')storeProgress()}, death:()=>openPanel('death'),failed:bootError,ready:()=>{paint();renderPanel()}
 })
 pixelPrefs()
 const textSample='暗影地下城角色技能任務背包裝備建立冒險者攻擊商店設定繼續遊戲繁體中文字型生命魔力更新版本'+hero.name+vendors.join('')+allMonsters.map(m=>m.name).join('')+zones.map(z=>z[0]).join('')+'爆擊閃避未命中吸血'+elements.join('')
@@ -93,8 +100,8 @@ void fontReady.then(loaded=>{
 }).catch(()=>bootError('繁體中文字型'))
 volume(hero.music,hero.sfx,hero.preferences.ambience)
 function pixelPrefs(){
- app.style.setProperty('--read-scale',hero.preferences.size>=1.3?'1.15':hero.preferences.size>=1.1?'1':'.91')
- app.dataset.textSize=hero.preferences.size>=1.3?'largest':hero.preferences.size>=1.1?'large':'standard'
+ app.style.setProperty('--read-scale',hero.preferences.size>=1.3?'1.17':hero.preferences.size>=1.1?'1':'.9')
+ app.dataset.textSize=hero.preferences.size>=1.3?'large':hero.preferences.size>=1.1?'standard':'small'
 }
 
 function bootError(asset:string){
@@ -203,9 +210,11 @@ const row=(heading:string,detail:string,tools='')=>`<div class="item-row"><div><
 const empty=(text:string)=>`<p class="empty">${text}</p>`
 const badge=(text:string)=>`<span class="badge">${text}</span>`
 const group=(title:string,body:string)=>`<section class="panel-group"><h3>${title}</h3>${body}</section>`
-const gearLabel=(g:Gear)=>`<span style="color:${qualityColors[g.grade]}">${gearName(g)}</span>`
+const itemIcon=(cell:number)=>`<i aria-hidden="true" class="item-art" style="--atlas-x:${cell%4*100/3}%;--atlas-y:${Math.floor(cell/4)*50}%"></i>`
+const iconCell=(m:Material)=>m==='red'?9:m==='blue'?10:11
+const gearLabel=(g:Gear)=>`<span class="gear-label" style="color:${qualityColors[g.grade]}">${itemIcon(g.slot)}<span>${gearName(g)}</span></span>`
 const gearStats=(g:Gear)=>[g.element!==undefined?elements[g.element]:'',g.leech?'吸血 '+g.leech+'%':''].filter(Boolean).join(' · ')
-const gearDetail=(g:Gear)=>`${quality[g.grade]} · 裝備等級 ${g.tier}${g.identified?' · 附加屬性 +'+g.roll+(gearStats(g)?' · '+gearStats(g):''):' · 待鑑定'}`
+const gearDetail=(g:Gear)=>`${quality[g.grade]} · 階級 ${g.tier} · ${jobRequirement(g)} · 穿戴等級不限${g.identified?' · 附加屬性 +'+g.roll+(gearStats(g)?' · '+gearStats(g):''):' · 待鑑定'}`
 const materialPrice:Record<Material,number>={red:14,blue:16,weapon:33,armor:26,bless:180,protect:140,warp:34,home:25,blink:38,morph:65,identify:31,book:62,shard:10}
 const shopMaterials:Partial<Record<number,Material[]>>={2:['red','blue'],3:['weapon','armor','warp','home','blink','morph','identify'],8:['bless','protect','book','morph'],9:['book']}
 const shopSlots:Partial<Record<number,number[]>>={0:[0],1:[1,2,3,4,5,6,7,8],8:[0,6,7,8]}
@@ -217,12 +226,12 @@ const sharedTitles:Record<string,string>={bag:'冒險背包',shield:'裝備欄',
 function openPanel(next:string){
  if(titleState!=='play')return
  if(!panel)previousFocus=document.activeElement as HTMLElement
- panel=next;world.blocked=true;chosenGear='';compareGear='';confirmRisk=false
+ panel=next;panelMode='open';world.blocked=true;chosenGear='';compareGear='';confirmRisk=false
  renderPanel()
 }
 function closePanel(){
  if(panel==='death')return
- panel='';world.blocked=false;renderPanel();previousFocus?.focus()
+ panel='';panelMode='open';world.blocked=false;renderPanel();previousFocus?.focus()
 }
 function openNpc(index:number){
  if(index===4)openPanel('forge')
@@ -240,6 +249,7 @@ function start(loaded:boolean){
   const settings={music:hero.music,sfx:hero.sfx,preferences:{...hero.preferences}}
   hero=Object.assign(createHero(name,jobIndex),settings)
  }
+ if(world.hero!==hero)world.resetRegionState()
  world.hero=hero
  world.dead=false;world.auto=false;world.target=undefined
  world.enter(hero.zone,{x:hero.x,y:hero.y},true)
@@ -251,7 +261,7 @@ function start(loaded:boolean){
  message(hero.zone===0?'燼燈村 · 安全區域':zones[hero.zone][0])
 }
 function modal(body:string,extra=''){
- return `<div class="modal-shade ${extra}"><section class="dialog" role="dialog" aria-modal="true" aria-label="${titleState==='play'?sharedTitles[panel]:'暗影地下城'}">${body}</section></div>`
+ return `<div class="modal-shade ${extra}"><section class="dialog" role="dialog" aria-modal="${extra.includes('dock-panel')?'false':'true'}" aria-label="${titleState==='play'?sharedTitles[panel]:'暗影地下城'}">${body}</section></div>`
 }
 function renderPanel(){
  const root=select('#modal-root')
@@ -275,7 +285,17 @@ function renderPanel(){
   return
  }
  if(!panel){root.innerHTML='';return}
- root.innerHTML=modal(`<div class="dialog-head"><div><span class="eyebrow">${zones[hero.zone][0]}</span><h2>${sharedTitles[panel]}</h2></div>${panel==='death'?'':action('close','關閉視窗',icon('close'),'icon-button')}</div><div class="panel-body">${renderBody()}</div>`,'system-modal')
+ if(panel==='death'){
+  root.innerHTML=modal(`<div class="dialog-head"><h2>${sharedTitles[panel]}</h2></div><div class="panel-body">${renderBody()}</div>`,'system-modal')
+  return
+ }
+ const controls=`<div class="panel-controls">
+  ${action(panelMode==='collapsed'?'panel-expand':'panel-collapse',panelMode==='collapsed'?'展開視窗':'收合視窗',icon(panelMode==='collapsed'?'expand':'chevron',17),'small-icon')}
+  ${action(panelMode==='minimized'?'panel-expand':'panel-minimize',panelMode==='minimized'?'還原視窗':'縮小視窗',icon(panelMode==='minimized'?'expand':'minus',17),'small-icon')}
+  ${action('close','關閉視窗',icon('close',17),'small-icon')}
+ </div>`
+ root.innerHTML=modal(`<div class="dialog-head"><h2>${sharedTitles[panel]}</h2>${controls}</div>${panelMode==='open'?'<div class="panel-body">'+renderBody()+'</div>':''}`,'dock-panel '+panelMode)
+
 }
 function questDescription(quest:Quest){
  if(quest.target!==undefined)return '擊敗 '+allMonsters.find(m=>m.id===quest.target)?.name
@@ -284,9 +304,20 @@ function questDescription(quest:Quest){
 function renderBody(){
  const village=safeZone(hero.zone)
  switch(panel){
-  case 'bag':return (compareGear?renderComparison(hero.bag.find(g=>g.uid===compareGear)):'')+group('裝備',hero.bag.map(g=>row(gearLabel(g),gearDetail(g),
-   (g.slot===0&&g.job!==hero.job?'':button('equip:'+g.uid,'穿戴'))+button('compare:'+g.uid,'比較')+(g.identified?'':button('identify:'+g.uid,'鑑定')))).join('')||empty('背包沒有裝備。'))+
-    group('消耗品與材料',materials.filter(m=>hero.items[m]>0).map(m=>row(materialNames[m],'持有 '+hero.items[m],['red','blue','home','warp','blink','morph'].includes(m)?button(m==='home'?'home-item':m,'使用'):'' )).join('')||empty('背包沒有材料。'))
+  case 'bag':{
+   const tabs=(['all',...categories] as const).map(tab=>button('bag-tab:'+tab,tab==='all'?'全部':categoryNames[tab],bagTab===tab?'primary':'')).join('')
+   const gearRows=hero.bag.filter(g=>bagTab==='all'||gearCategory(g)===bagTab).map(g=>row(gearLabel(g),gearDetail(g),
+    (compatibleGear(hero,g)?button('equip:'+g.uid,'穿戴'):'')+button('compare:'+g.uid,'比較')+
+    (g.identified?'':button('identify:'+g.uid,'鑑定'))+button('lock:'+g.uid,gearLocked(hero,g)?'解除鎖定':'鎖定'))).join('')
+   const itemRows=materials.filter(m=>hero.items[m]>0&&(bagTab==='all'||itemCategory(m)===bagTab)).map(m=>row(
+    '<span class="gear-label">'+itemIcon(iconCell(m))+materialNames[m]+'</span>','持有 × '+hero.items[m],
+    (['red','blue','home','warp','blink','morph'].includes(m)?button(m==='home'?'home-item':m,'使用'):'')+
+    button('lock:'+m,materialLocked(hero,m)?'解除鎖定':'鎖定'))).join('')
+   return `<div class="bag-summary"><b>裝備槽 ${hero.bag.length}/${bagLimit}</b>${button('sort-bag','自動排序')}</div><div class="tabs bag-tabs">${tabs}</div>`+
+    (compareGear?renderComparison(hero.bag.find(g=>g.uid===compareGear)):'')+
+    (gearRows?group('裝備',gearRows):'')+(itemRows?group('道具堆疊',itemRows):'')+
+    (!gearRows&&!itemRows?empty('此分類沒有道具。'):'')
+  }
   case 'shield':return group('已穿戴',slots.map((slot,i)=>{
    const g=hero.worn[i];return g?row(slot+' · '+gearLabel(g),gearDetail(g),button('unequip:'+i,'卸除')):row(slot,'空欄位')
   }).join(''))+(village?button('forge',icon('spark',16)+' 前往強化','primary'):'')
@@ -317,9 +348,9 @@ function renderBody(){
    return `<div class="tabs">${tabs}</div>`+group('商店庫存',material.map(m=>row(materialNames[m],materialPrice[m]+' 金幣 · 庫存 '+stock(m,limit),
     `<input aria-label="${materialNames[m]}購買數量" type="number" min="1" max="${Math.max(1,stock(m,limit))}" value="1">`+button('buy:'+m,'購買'))).join('')+
     goods.map(s=>row(gearLabel(shopGear(s,grade)),(45+grade*75)+' 金幣 · 庫存 '+stock(activeShop+':'+s,limit),button('purchase:'+s,'購買'))).join(''))+
-   group('出售裝備',hero.bag.map(g=>row(gearLabel(g),sellPrice(g)+' 金幣',button('sell:'+g.uid,'出售'))).join('')||empty('沒有可出售的裝備。'))+
+   group('出售裝備',hero.bag.map(g=>row(gearLabel(g),sellPrice(g)+' 金幣',gearLocked(hero,g)?badge('已鎖定'):button('sell:'+g.uid,'出售'))).join('')||empty('沒有可出售的裝備。'))+
    group('出售道具',materials.filter(m=>hero.items[m]>0).map(m=>row(materialNames[m],materialSale(m)+' 金幣／件 · 持有 '+hero.items[m],
-     `<input aria-label="${materialNames[m]}出售數量" type="number" min="1" max="${hero.items[m]}" value="1">`+button('sell-material:'+m,'出售'))).join('')||empty('沒有可出售的道具。'))
+     materialLocked(hero,m)?badge('已鎖定'):`<input aria-label="${materialNames[m]}出售數量" type="number" min="1" max="${hero.items[m]}" value="1">`+button('sell-material:'+m,'出售'))).join('')||empty('沒有可出售的道具。'))
   }
   case 'forge':{
    if(!village)return empty('請返回燼燈村找強化師。')
@@ -337,17 +368,22 @@ function renderBody(){
     ${button('upgrade','執行強化','primary')}`)+button('forge-select:','更換裝備')
   }
   case 'vault':return village?group('存入裝備',hero.bag.map(g=>row(gearLabel(g),gearDetail(g),button('deposit:'+g.uid,'存入'))).join('')||empty('背包沒有裝備。'))+group('倉庫',hero.vault.map(g=>row(gearLabel(g),gearDetail(g),button('withdraw:'+g.uid,'取出'))).join('')||empty('倉庫是空的。')):empty('請返回燼燈村使用倉庫。')
-  case 'travel':return group('艾瑟蘭王國',zones.map(([name,level,,,,description],i)=>row(name+' '+badge(i===hero.zone?'所在區域':'等級 '+level),description,
-   i!==hero.zone&&hero.level>=level?(village||hero.items.warp>0?button('travel-to:'+i,village?'傳送':'卷軸傳送'):''):'' )).join(''))+(village?button('restore','在燼燈泉休息'):'')
+  case 'travel':return group('艾瑟蘭王國',
+   group('王國道路',`<div class="road-map">${[zones.slice(0,8),zones.slice(8)].map((chain,j)=>`<div>${chain.map(([name],i)=>`<span class="${hero.zone===i+j*8?'here':''}">${name}</span>`).join('<b aria-hidden="true">·</b>')}</div>`).join('')}</div>`)+zones.map(([name,level,,,,description],i)=>row(name+' '+badge(i===hero.zone?'所在區域':'等級 '+level),description,
+   i!==hero.zone&&hero.level>=level?([landNeighbor(hero.zone,-1),landNeighbor(hero.zone,1)].includes(i)?button('road-to:'+i,'沿路步行'):'')+
+   (village||hero.items.warp>0?button('travel-to:'+i,village?'傳送':'卷軸傳送'):''):'' )).join(''))+(village?button('restore','在燼燈泉休息'):'')
   case 'codex':return group('成就',achievements.map(a=>row(a.name,a.description,badge(Math.min(hero.stats[a.event]??0,a.count)+' / '+a.count))).join(''))+
    group('變身圖鑑',morphs.map(([name,,move,atk],i)=>row(name,'移速 '+Math.round(move*100)+'% · 攻速 '+Math.round(atk*100)+'%',hero.morphs.includes(i)?button('morph:'+i,'變身'):badge('未解鎖'))).join(''))+
    group('召喚生物',pets.map(p=>row(p[0],p[2])).join(''))+
    group('魔物圖鑑',allMonsters.map(m=>row(hero.bestiary[m.id]?m.name:'未記錄的魔物',zones[m.zone][0]+' · '+m.rank,badge('擊敗 '+(hero.bestiary[m.id]??0)))).join(''))
-  case 'settings':return group('畫面與操作',`<label class="volume-row">字體大小 <select id="text-size"><option value="1">標準</option><option value="1.15" ${hero.preferences.size>=1.1&&hero.preferences.size<1.3?'selected':''}>大字體</option><option value="1.35" ${hero.preferences.size>=1.3?'selected':''}>特大字體</option></select></label>
+  case 'settings':return group('畫面與操作',`<label class="volume-row">字體大小 <select id="text-size"><option value="1">小字體</option><option value="1.15" ${hero.preferences.size>=1.1&&hero.preferences.size<1.3?'selected':''}>標準</option><option value="1.35" ${hero.preferences.size>=1.3?'selected':''}>大字體</option></select></label>
    <label class="volume-row">畫質 <select id="detail"><option value="balanced" ${hero.preferences.detail==='balanced'?'selected':''}>標準</option><option value="high" ${hero.preferences.detail==='high'?'selected':''}>高畫質</option><option value="ultra" ${hero.preferences.detail==='ultra'?'selected':''}>極致畫質</option></select></label>
    <label class="volume-row">地面點擊 <select id="click-mode"><option value="move">移動與互動</option><option value="interact" ${hero.preferences.click==='interact'?'selected':''}>只互動，使用搖桿移動</option></select></label>
    <label class="toggle"><input id="shake" type="checkbox" ${hero.preferences.shake?'checked':''}> 啟用爆擊震動</label>`)+group('音訊',`<label class="volume-row">背景音樂 <input id="music" type="range" min="0" max="1" step="0.05" value="${hero.music}"></label><label class="volume-row">遊戲音效 <input id="sfx" type="range" min="0" max="1" step="0.05" value="${hero.sfx}"></label><label class="volume-row">環境音量 <input id="ambience" type="range" min="0" max="1" step="0.05" value="${hero.preferences.ambience}"></label>`)+
-   group('本機存檔',`<div class="tabs">${button('save','儲存進度')}${button('export','匯出存檔')}${button('fullscreen','切換全螢幕')}${button('import','匯入存檔')}${button('home','返回首頁')}</div>`)+group('操作',help())+group('版本',row('暗影地下城 '+versionLabel,releaseDate+'（台灣） · '+release.id)+row('角色與場景資源','已載入 '+world.assetCount+' 張圖像 · Noto Sans TC'))
+   group('自動拾取',`<label class="toggle"><input id="pickup-enabled" type="checkbox" ${hero.pickup.enabled?'checked':''}> 自動拾取有效範圍內的戰利品</label>
+   <label class="volume-row">拾取距離 <select id="pickup-range">${[65,100,135,165].map(value=>`<option value="${value}" ${value===hero.pickup.range?'selected':''}>${value}</option>`).join('')}</select></label>
+   <label class="volume-row">最低裝備品質 <select id="pickup-grade">${quality.map((label,i)=>`<option value="${i}" ${i===hero.pickup.minGrade?'selected':''}>${label}</option>`).join('')}</select></label>
+   <div class="pickup-groups">${categories.map(key=>`<label class="toggle"><input type="checkbox" data-pickup-group="${key}" ${hero.pickup.groups.includes(key)?'checked':''}> ${categoryNames[key]}</label>`).join('')}</div>`)+group('本機存檔',`<div class="tabs">${button('save','儲存進度')}${button('export','匯出存檔')}${button('fullscreen','切換全螢幕')}${button('import','匯入存檔')}${button('home','返回首頁')}</div>`)+group('操作',help())+group('版本',row('暗影地下城 '+versionLabel,releaseDate+'（台灣） · '+release.id)+row('角色與場景資源','已載入 '+world.assetCount+' 張圖像 · Noto Sans TC'))
   case 'death':return `<div class="death">${icon('skull',44)}<p>你在暗影中倒下，失去 6% 的金幣。</p>${button('revive','在燼燈村復活','primary')}</div>`
   default:return ''
  }
@@ -357,10 +393,14 @@ function help(){
 }
 function renderComparison(gear?:Gear){
  if(!gear)return ''
- const current=hero.worn[gear.slot], delta=gearPower(gear)-(current?gearPower(current):0)
+ const current=hero.worn[gear.slot]
+ const before=attributes(hero), after=attributes({...hero,worn:{...hero.worn,[gear.slot]:gear}})
  const card=(item?:Gear)=>item?'<strong>'+gearLabel(item)+'</strong><p>'+gearDetail(item)+'</p>':'空欄位'
+ const stats=[['物理攻擊',after.attack-before.attack],['魔法攻擊',after.magic-before.magic],['防禦',after.defense-before.defense],
+  ['生命上限',after.hp-before.hp],['魔力上限',after.mp-before.mp],['吸血（百分點）',(after.leech-before.leech)*100]] as const
  return group('比較'+slots[gear.slot],`<div class="comparison"><div><h4>目前裝備</h4>${card(current)}</div><div><h4>背包裝備</h4>${card(gear)}</div></div>
- <p class="${delta<0?'warning':'advantage'}">${gear.slot===0?'攻擊力':'防禦力'} ${delta>=0?'+':''}${(delta*(gear.slot===0?1:.48)).toFixed(1)}</p>`)
+ <div class="stat-grid">${stats.map(([name,value])=>`<div><span>${name}</span><b class="${value<0?'warning':'advantage'}">${value>0?'+':''}${value.toFixed(1)}</b></div>`).join('')}</div>`)
+
 }
 function shopGear(slot:number,grade:number){
  return hero.zone===8&&activeShop===8?makeRelic(slot,grade,hero.level,hero.job,0):makeGear(slot,grade,hero.level,slot===0?hero.job:undefined)
@@ -372,6 +412,22 @@ function perform(key:string,element:HTMLElement){
  const [type,...args]=key.split(':'), id=args.join(':'), index=Number(id)
  const village=safeZone(hero.zone)
  if(type==='close'){closePanel();return}
+ if(type==='fold-map'||type==='fold-tracker'){
+  const selector=type==='fold-map'?'.map-card':'.tracker'
+  const folded=select(selector).classList.toggle('folded')
+  const noun=type==='fold-map'?'小地圖':'任務追蹤'
+  element.setAttribute('aria-expanded',String(!folded))
+  element.setAttribute('aria-label',(folded?'展開':'收合')+noun)
+  element.title=(folded?'展開':'收合')+noun
+  if(type==='fold-map')app.dataset.mapFolded=String(folded)
+  return
+ }
+ if(panel&&panel!=='death'&&['panel-expand','panel-minimize','panel-collapse'].includes(type)){
+  panelMode=type==='panel-expand'?'open':type==='panel-minimize'?'minimized':'collapsed'
+  world.blocked=panelMode==='open'
+  renderPanel()
+  return
+ }
  if(type==='title-help'){
   select('#modal-root').innerHTML=modal(`<div class="dialog-head"><h2>操作指南</h2>${action('home','關閉視窗',icon('close'),'icon-button')}</div>${help()}`,'create-modal')
   return
@@ -435,14 +491,22 @@ function perform(key:string,element:HTMLElement){
  }
  const g=allGear().find(g=>g.uid===id)
  const bagItem=hero.bag.find(g=>g.uid===id)
+ if(type==='bag-tab'){bagTab=id==='all'||categories.includes(id as Category)?id as typeof bagTab:'all';renderPanel();return}
+ if(type==='sort-bag'){sortBag(hero.bag);storeProgress();renderPanel();return}
+ if(type==='lock'&&(g||materials.includes(id as Material))){
+  hero.locks=hero.locks.includes(id)?hero.locks.filter(key=>key!==id):[...hero.locks,id]
+  storeProgress();renderPanel();return
+ }
+ if(type==='road-to'&&world.walkToRegion(index)){closePanel();return}
  if(type==='compare'&&bagItem){compareGear=compareGear===id?'':id;renderPanel();return}
  if(type==='quest-filter'){questFilter=id;renderPanel();return}
- if(type==='equip'&&bagItem&&(bagItem.slot!==0||bagItem.job===hero.job)){
+ if(type==='equip'&&bagItem&&compatibleGear(hero,bagItem)){
   const previous=hero.worn[bagItem.slot]
   hero.bag=hero.bag.filter(g=>g!==bagItem)
   if(previous)hero.bag.push(previous)
   hero.worn[bagItem.slot]=bagItem;record(hero,'equip');sound('hit');message('已穿戴 '+gearName(bagItem))
  }else if(type==='unequip'&&hero.worn[index]){
+  if(fullBag(hero)){message('背包已滿','warn');return}
   hero.bag.push(hero.worn[index]);delete hero.worn[index]
  }else if(type==='identify'&&g&&!g.identified){
   if(hero.items.identify<1){message('需要鑑定卷軸','warn');return}
@@ -460,20 +524,25 @@ function perform(key:string,element:HTMLElement){
   hero.items[material]+=quantity;hero.gold-=cost;hero.stock[id]=(hero.stock[id]??0)+quantity
   message('已購買 '+quantity+' × '+materialNames[material])
  }else if(type==='purchase'&&village&&(shopSlots[activeShop]??[]).includes(index)){
+  if(fullBag(hero)){message('背包已滿，未扣除金幣','warn');return}
   const grade=activeShop===8?gradeToday():1, cost=45+grade*75, key=activeShop+':'+index
   if(cost>hero.gold||!stock(key,activeShop===8?3:25)){message('金幣不足或已售罄','warn');return}
   hero.bag.push(shopGear(index,grade));hero.gold-=cost;hero.stock[key]=(hero.stock[key]??0)+1
   sound('loot')
  }else if(type==='sell-material'&&village&&materials.includes(id as Material)){
-  const item=id as Material, count=element.parentElement?.querySelector('input')?.valueAsNumber??1
+  const item=id as Material
+  if(materialLocked(hero,item)){message('道具已鎖定','warn');return}
+  const count=element.parentElement?.querySelector('input')?.valueAsNumber??1
   if(!Number.isInteger(count)||count<1||count>hero.items[item]){message('請輸入可出售的數量','warn');return}
   hero.items[item]-=count;hero.gold+=materialSale(item)*count;sound('loot')
  }else if(type==='sell'&&village&&bagItem){
+  if(gearLocked(hero,bagItem)){message('裝備已鎖定','warn');return}
   hero.gold+=sellPrice(bagItem);hero.bag=hero.bag.filter(g=>g!==bagItem);sound('loot')
  }else if(type==='deposit'&&village&&bagItem){
   hero.bag=hero.bag.filter(g=>g!==bagItem);hero.vault.push(bagItem)
  }else if(type==='withdraw'&&village){
   const item=hero.vault.find(g=>g.uid===id)
+  if(item&&fullBag(hero)){message('背包已滿，裝備保留在倉庫','warn');return}
   if(item){hero.vault=hero.vault.filter(g=>g!==item);hero.bag.push(item)}
  }else if(type==='forge-select'&&village){chosenGear=id;confirmRisk=false}
  else if(type==='upgrade'&&village){
@@ -500,6 +569,7 @@ function perform(key:string,element:HTMLElement){
    hero.tracking=id
   }else if(type==='track'&&hero.quests[id]!==undefined)hero.tracking=id
   else if(type==='claim'&&!hero.claims[id]&&hero.quests[id]>=quest.count){
+   if(quest.zone&&quest.event==='boss'&&fullBag(hero)){message('背包已滿，獎勵仍可領取','warn');return}
    hero.claims[id]=true;hero.gold+=30+quest.count*7+(quest.zone??0)*27
    world.reward(28+quest.count*7+(quest.zone??0)*36)
    if(quest.zone&&quest.event==='boss')hero.bag.push(quest.zone>=9?makeRelic((quest.zone+2)%8+1,3,zones[quest.zone][1],hero.job,quest.zone-8):makeGear((quest.zone+2)%9,3,zones[quest.zone][1]))
@@ -516,7 +586,7 @@ function perform(key:string,element:HTMLElement){
   setTimeout(()=>URL.revokeObjectURL(url),1000);return
  }
  storeProgress();paint()
- if(panel){
+ if(panel&&panelMode==='open'){
   const scroll=select('.panel-body').scrollTop
   renderPanel()
   select('.panel-body').scrollTop=scroll
@@ -542,6 +612,14 @@ app.addEventListener('input',event=>{
 })
 app.addEventListener('change',async event=>{
  const input=event.target as HTMLInputElement
+ if(input.id==='pickup-enabled'){hero.pickup.enabled=input.checked;storeProgress();return}
+ if(input.id==='pickup-range'){hero.pickup.range=Number(input.value);storeProgress();return}
+ if(input.id==='pickup-grade'){hero.pickup.minGrade=Number(input.value);storeProgress();return}
+ const group=input.dataset.pickupGroup as Category|undefined
+ if(group&&categories.includes(group)){
+  hero.pickup.groups=input.checked?[...new Set([...hero.pickup.groups,group])]:hero.pickup.groups.filter(value=>value!==group)
+  storeProgress();return
+ }
  if(input.id==='text-size'){hero.preferences.size=Number(input.value);pixelPrefs();storeProgress();return}
  if(input.id==='detail'){
   hero.preferences.detail=input.value==='ultra'?'ultra':input.value==='balanced'?'balanced':'high'
@@ -561,7 +639,7 @@ app.addEventListener('change',async event=>{
 })
 document.addEventListener('keydown',event=>{
  if(event.key==='Escape'){if(panel)closePanel();else if(titleState==='create'){titleState='title';renderPanel()}return}
- if(titleState!=='play'||panel||event.repeat||event.ctrlKey||event.altKey||event.metaKey)return
+ if(titleState!=='play'||world.blocked||event.repeat||event.ctrlKey||event.altKey||event.metaKey)return
  if((event.target as HTMLElement).matches('button,input,select,textarea')&&event.key===' ')return
  const key=event.key.toLowerCase()
  if([' ','q','r','e',...keyboard].includes(key)){event.preventDefault();unlock()}
@@ -581,7 +659,7 @@ function stickMove(event:PointerEvent){
  knob.style.transform=`translate(${world.joystick.x*radius}px,${world.joystick.y*radius}px)`
 }
 joystick.addEventListener('pointerdown',event=>{
- if(titleState!=='play'||panel)return
+ if(titleState!=='play'||world.blocked)return
  if(stick!==undefined)return
  stick=event.pointerId;joystick.setPointerCapture(stick);stickMove(event)
 })

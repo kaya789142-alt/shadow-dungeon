@@ -5,7 +5,7 @@ const base=new URL(process.argv[2])
 const expected=process.argv[3]
 const expectedVersion=JSON.parse(readFileSync(new URL('../package.json',import.meta.url),'utf8')).version
 const publicDir=new URL('../public/',import.meta.url)
-const assetDirectories=['art-v22','art-v30','art-v31','score-v22','fx-v22']
+const assetDirectories=['art-v22','art-v30','art-v31','art-sample','score-v22','fx-v22']
 const assets=assetDirectories.flatMap(directory=>
  readdirSync(new URL(directory+'/',publicDir),{withFileTypes:true})
   .filter(entry=>entry.isFile()&&/\.(?:webp|json|m4a)$/.test(entry.name))

@@ -68,10 +68,10 @@ try{
  for(let job=0;job<jobs.length;job++){
   if(job){await button('暗影地下城首頁').tap();await enter(job)}
   await page.keyboard.down('d')
-  await page.waitForFunction(name=>document.querySelector('#game').dataset.pose?.startsWith('motion-'+name+':stride'),jobs[job])
+  await page.waitForFunction(name=>name==='knight'?document.querySelector('#game').dataset.pose?.match(/^sample-directions:(stride|pass)-/):document.querySelector('#game').dataset.pose?.startsWith('motion-'+name+':stride'),jobs[job])
   await page.keyboard.up('d')
   await button('普通攻擊').tap()
-  await page.waitForFunction(name=>document.querySelector('#game').dataset.pose==='motion-'+name+':strike',jobs[job])
+  await page.waitForFunction(name=>name==='knight'?document.querySelector('#game').dataset.pose?.startsWith('sample-directions:attack-'):document.querySelector('#game').dataset.pose==='motion-'+name+':strike',jobs[job])
  }
  console.log('八方向輸入與五職業專用步行／攻擊圖格通過')
  await button('暗影地下城首頁').tap()

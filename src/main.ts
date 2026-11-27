@@ -19,12 +19,15 @@ import './polish.css'
 import { activateCharacter, deleteCharacter, roster } from './characters'
 import { realmChart } from './cartography'
 import { equipmentLayers } from './equipment-appearance'
+import { atlasCell, photographedDoll, sampleArt } from './art-sample'
+import './art-sample.css'
 import { addItem, bagCategories, bagGearCategory, bagItemCategory, bagLimit, canSellGear, canSellItem, categories, categoryNames, compatibleGear, fullBag, gearLocked, gearSalePrice, jobRequirement, materialLocked, quoteGearSale, sellQuotedGear, sortBag } from './inventory'
 import type { BagCategory, Category } from './inventory'
 import { directions, edgePoint, nextDirection, regionNeighbor } from './overworld'
 import { release, releaseDate, trackRelease, versionLabel } from './release'
 
 const app=document.querySelector<HTMLElement>('#app')!
+app.style.setProperty('--sample-atlas',`url(${new URL(sampleArt('equipment'),document.baseURI).href})`)
 app.style.setProperty('--inventory-atlas',`url(${new URL(import.meta.env.BASE_URL+'art-v30/items.webp',document.baseURI).href})`)
 const select=<T extends HTMLElement=HTMLElement>(selector:string)=>document.querySelector<T>(selector)!
 const escape=(value:string)=>value.replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]!))
@@ -232,7 +235,7 @@ const empty=(text:string)=>`<p class="empty">${text}</p>`
 const badge=(text:string)=>`<span class="badge">${text}</span>`
 const group=(title:string,body:string)=>`<section class="panel-group"><h3>${title}</h3>${body}</section>`
 const itemIcon=(cell:number)=>`<i aria-hidden="true" class="item-art" style="--atlas-x:${cell%4*100/3}%;--atlas-y:${Math.floor(cell/4)*50}%"></i>`
-const gearIcon=(slot:number)=>slot===9?`<i aria-hidden="true" class="item-art belt-icon">${icon('belt',22)}</i>`:itemIcon(slot)
+const gearIcon=(slot:number)=>`<i aria-hidden="true" class="item-art sample-icon" style="${atlasCell(slot)}"></i>`
 const slotLabel=(slot:number)=>slot===0?'主武器':slot===1?'副手':slots[slot]
 const iconCell=(m:Material)=>m==='red'?9:m==='blue'?10:11
 const gearLabel=(g:Gear)=>`<span class="gear-label" style="color:${qualityColors[g.grade]}">${gearIcon(g.slot)}<span>${gearName(g)}</span></span>`
@@ -508,7 +511,7 @@ function paperDoll(){
  const gear=hero.worn[selectedSlot], job=jobs[hero.job], stats=attributes(hero)
  return `<div class="doll-stats">戰力指標 ${combatScore(stats)} · 物攻 ${Math.round(stats.attack)} · 魔攻 ${Math.round(stats.magic)} · 防禦 ${Math.round(stats.defense)}</div>
   <div class="doll"><div class="doll-slots">${[2,3,4,9,5].map(slotCard).join('')}</div>
-  <div class="doll-portrait"><div class="doll-figure"><img src="${playerArt(hero.job)}" alt="">${equipmentLayers(hero.job,hero.worn)}</div><span>${escape(hero.name)} · ${job.name}</span></div>
+  <div class="doll-portrait"><div class="doll-figure ${hero.job===0?'sample-doll':''}">${hero.job===0?photographedDoll(hero.worn,true):''}<img src="${playerArt(hero.job)}" alt="">${hero.job===0?photographedDoll(hero.worn,false):equipmentLayers(hero.job,hero.worn)}</div><span>${escape(hero.name)} · ${job.name}</span></div>
   <div class="doll-slots">${[0,1,6,7,8].map(slotCard).join('')}</div></div>`+
   group('角色屬性',`<div class="doll-vitals"><span>生命 ${Math.ceil(hero.hp)} / ${Math.ceil(stats.hp)}</span><span>魔力 ${Math.ceil(hero.mp)} / ${Math.ceil(stats.mp)}</span>
    <span>攻速 ${world.attackRate.toFixed(2)} 次／秒</span><span>移速 ${Math.round(world.movementSpeed)} 單位／秒</span>

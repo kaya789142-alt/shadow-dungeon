@@ -7,11 +7,11 @@ import type { Category, Drop } from './inventory.ts'
 export const spawn = {x:805,y:552}
 export const materials = Object.keys(materialNames) as Material[]
 export const day = () => new Intl.DateTimeFormat('sv-SE').format(new Date())
-export const defaultPreferences={size:1.15,textRev:3,detail:'high' as Detail,click:'move' as 'move'|'interact',shake:true,ambience:.35}
+export const defaultPreferences={size:1.15,textRev:3,detail:'high' as Detail,click:'move' as 'move'|'interact',shake:true,ambience:.35,master:1,damageText:true,shadows:true,effects:true}
 export type Hero = ReturnType<typeof createHero>
 export function createHero(name:string, job:number) {
  return {
-  version:1, name:name.trim().slice(0,16)||'無名旅人', job, level:1, xp:0, gold:180, hp:999, mp:999,
+  version:1, characterId:globalThis.crypto?.randomUUID?.()??Date.now().toString(36)+Math.random().toString(36).slice(2), name:name.trim().slice(0,16)||'無名旅人', job, level:1, xp:0, gold:180, hp:999, mp:999,
   zone:0, x:spawn.x, y:spawn.y, bag:[makeGear(0,0,1,job),makeGear(3,0,1)],
   worn:{} as Record<number,Gear>, vault:[] as Gear[],
   items:{red:8,blue:6,weapon:3,armor:3,bless:0,protect:1,warp:1,home:2,blink:2,morph:1,identify:2,book:2,shard:0} satisfies Record<Material,number>,
@@ -103,7 +103,7 @@ export function record(hero:Hero,event:string,amount=1,target?:number){
 export function achievementTitles(hero:Hero){
  return achievements.filter(item=>(hero.stats[item.event]??0)>=item.count)
 }
-const saveKey='shadow-dungeon.v1'
+export const saveKey='shadow-dungeon.v1'
 export function save(hero:Hero){localStorage.setItem(saveKey,JSON.stringify(hero))}
 const object = (value:unknown):value is Record<string,unknown> => typeof value==='object'&&value!==null&&!Array.isArray(value)
 const integer = (value:unknown,min:number,max:number):value is number => typeof value==='number'&&Number.isInteger(value)&&value>=min&&value<=max
@@ -140,6 +140,7 @@ export function decodeSave(json:string):Hero {
  if(new Set(allGear.map(g=>g.uid)).size!==allGear.length)throw new Error('存檔含重複的裝備')
  const hero=value as unknown as Hero
  hero.name=hero.name.slice(0,16)
+ if(!/^[a-z0-9-]{1,90}$/i.test(typeof value.characterId==='string'?value.characterId:''))hero.characterId=globalThis.crypto?.randomUUID?.()??Date.now().toString(36)+Math.random().toString(36).slice(2)
  hero.items.blink??=0
  const itemDates=object(value.itemAcquiredAt)?value.itemAcquiredAt:{}
  hero.itemAcquiredAt=Object.fromEntries(materials.flatMap(key=>integer(itemDates[key],0,Number.MAX_SAFE_INTEGER)?[[key,itemDates[key]]]:[]))
@@ -161,7 +162,9 @@ export function decodeSave(json:string):Hero {
   detail:prefs.detail==='balanced'||prefs.detail==='ultra'?prefs.detail:'high',
   click:prefs.click==='interact'?'interact':'move',
   ambience:finite(prefs.ambience,0,1)?prefs.ambience:defaultPreferences.ambience,
-  shake:typeof prefs.shake==='boolean'?prefs.shake:defaultPreferences.shake
+  shake:typeof prefs.shake==='boolean'?prefs.shake:defaultPreferences.shake,
+  master:finite(prefs.master,0,1)?prefs.master:1,
+  damageText:prefs.damageText!==false,shadows:prefs.shadows!==false,effects:prefs.effects!==false
  }
  rollover(hero)
  return hero

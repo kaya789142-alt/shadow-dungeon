@@ -1,5 +1,9 @@
 # 素材與授權清單
 
+## V3.2 畫質與介面優化
+
+原創羊皮紙區域地標、河流和道路向量由 `src/cartography.ts`、`src/polish.css` 繪製。地面紋理、命中火花及召喚光環由 `src/art.ts` 與 `src/world.ts` 程式生成。沿用下列立繪、動作、聲音與字型授權。
+
 ## V3.2
 
 - 紙娃娃的裝備線稿、五職業定位與品質配色由 `src/equipment-appearance.ts` 繪製成原創向量圖層。腰帶圖示為 `src/icons.ts` 內原創向量圖形，可隨 Retina 縮放。

@@ -2,7 +2,7 @@ import Phaser from 'phaser'
 import '@fontsource-variable/noto-sans-tc'
 import { achievementTitles, attributes, createHero, decodeSave, expNeeded, gearPower, load, makeGear, makeRelic, materials, record, rollover, save, spawn, upgrade, upgradeInfo } from './model'
 import { achievements, allMonsters, elements, gearName, jobs, materialNames, morphs, pets, quality, qualityColors, quests, rules, safeZone, slots, vendors, zoneRoutes, zones } from './data'
-import type { Gear, Material, Quest } from './data'
+import type { Gear, Material, Quest, Skill } from './data'
 import { entry, exit, HEIGHT, WIDTH } from './art'
 import { icon } from './icons'
 import { sound, unlock, volume } from './sound'
@@ -15,6 +15,9 @@ import './v22.css'
 import './v30.css'
 import './v31.css'
 import './v32.css'
+import './polish.css'
+import { activateCharacter, deleteCharacter, roster } from './characters'
+import { realmChart } from './cartography'
 import { equipmentLayers } from './equipment-appearance'
 import { addItem, bagCategories, bagGearCategory, bagItemCategory, bagLimit, canSellGear, canSellItem, categories, categoryNames, compatibleGear, fullBag, gearLocked, gearSalePrice, jobRequirement, materialLocked, quoteGearSale, sellQuotedGear, sortBag } from './inventory'
 import type { BagCategory, Category } from './inventory'
@@ -44,6 +47,7 @@ app.innerHTML=`
     <span class="player-details"><span class="player-title" id="player-name">無名旅人</span><span id="player-job" class="player-job">騎士</span>
      <span class="meter health"><i id="hp-fill"></i><span>${icon('heart',11)}<b id="hp-numbers"></b></span></span>
      <span class="meter mana"><i id="mp-fill"></i><span>${icon('drop',11)}<b id="mp-numbers"></b></span></span>
+     <span class="hud-xp" id="hud-xp">經驗 0%</span>
     </span>
    </button>
    <div id="boss" class="boss-bar" hidden><div id="boss-name"></div><span class="meter health"><i id="boss-fill"></i></span></div>
@@ -98,7 +102,9 @@ let activeShop=0
 let toastTimer=0
 let mapKey=''
 let confirmRisk=false
-let titleState:'title'|'create'|'play'='title'
+let mapSelection=-1
+let tradeColumn='sell'
+let titleState:'title'|'create'|'roster'|'play'='title'
 const logs:{text:string;style:string}[]=[{text:'歡迎來到燼燈村，冒險者。',style:'gold'},{text:'點擊地面探索，或使用方向鍵移動。',style:''}]
 const world=new World(hero,{
  message, npc:openNpc, refresh:()=>{paint();if(panel&&panelMode==='open')renderPanel();if(titleState==='play')storeProgress()}, death:()=>openPanel('death'),failed:bootError,ready:()=>{paint();renderPanel()}
@@ -111,7 +117,7 @@ void fontReady.then(loaded=>{
  app.dataset.font='noto-sans-tc'
  return new Phaser.Game({type:Phaser.CANVAS,parent:'game',backgroundColor:'#25242c',pixelArt:false,render:{antialias:true,powerPreference:'low-power'},scale:{mode:Phaser.Scale.NONE,width:Math.max(1,select('#game').clientWidth),height:Math.max(1,select('#game').clientHeight)},input:{touch:{capture:true}},scene:world})
 }).catch(()=>bootError('繁體中文字型'))
-volume(hero.music,hero.sfx,hero.preferences.ambience)
+volume(hero.music,hero.sfx,hero.preferences.ambience,hero.preferences.master)
 function pixelPrefs(){
  app.style.setProperty('--read-scale',hero.preferences.size>=1.3?'1.17':hero.preferences.size>=1.1?'1':'.9')
  app.dataset.textSize=hero.preferences.size>=1.3?'large':hero.preferences.size>=1.1?'standard':'small'
@@ -159,7 +165,7 @@ function paint(){
  }
  setText('top-zone',region[0]);setText('map-name',region[0]);setText('gold',hero.gold.toLocaleString('zh-TW'))
  const ratio=hero.level>=rules.maxLevel?100:Math.floor(100*hero.xp/expNeeded(hero.level))
- select('#xp-fill').style.width=ratio+'%';setText('xp-numbers',ratio+'%')
+ select('#xp-fill').style.width=ratio+'%';setText('xp-numbers',ratio+'%');setText('hud-xp','經驗 '+ratio+'%')
  setText('red-count',String(hero.items.red));setText('blue-count',String(hero.items.blue))
  keyboard.forEach((_,i)=>{
   const span=select('#cd-'+i), button=span.parentElement!, left=Math.ceil(world.cooldowns[i]-world.clock)
@@ -239,12 +245,14 @@ const stock=(id:string,limit:number)=>Math.max(0,limit-(hero.stock[id]??0))
 const gradeToday=()=>2+new Date().getDate()%3
 const available=(g:Gear)=>hero.bag.find(item=>item.uid===g.uid)||hero.worn[g.slot]
 const allGear=()=>[...hero.bag,...Object.values(hero.worn)]
-const sharedTitles:Record<string,string>={bag:'冒險背包',shield:'裝備欄',character:'角色資訊',skill:'職業技能',quest:'任務簿',shop:'燼燈市集',settings:'遊戲設定',travel:'王國地圖',forge:'燼燈鍛爐',vault:'公會倉庫',codex:'冒險圖鑑',death:'暗影降臨'}
+const sharedTitles:Record<string,string>={bag:'冒險背包',shield:'裝備欄',character:'角色資訊',skill:'職業技能',quest:'任務簿',shop:'燼燈市集',settings:'遊戲設定',travel:'王國地圖',trade:'整備與交易',forge:'燼燈鍛爐',vault:'公會倉庫',codex:'冒險圖鑑',death:'暗影降臨'}
 function openPanel(next:string){
  if(titleState!=='play')return
  if(!panel)previousFocus=document.activeElement as HTMLElement
  panel=next;panelMode='open';world.blocked=true;chosenGear='';compareGear='';confirmRisk=false
  saleDraft=undefined;itemSaleDraft=undefined;saleSelection.clear();shopTab='buy'
+ if(next==='travel')mapSelection=hero.zone
+ if(next==='trade')tradeColumn='sell'
  renderPanel()
 }
 function closePanel(){
@@ -259,13 +267,19 @@ function openNpc(index:number){
  else if(index===9)openPanel('skill')
  else{activeShop=index;openPanel('shop')}
 }
+function switchCharacter(next:typeof hero){
+ try{
+  activateCharacter(hasSave?hero:undefined,next)
+  hero=next;hasSave=true
+  return true
+ }catch{message('角色存檔失敗，請確認瀏覽器儲存空間','warn');return false}
+}
 function start(loaded:boolean){
  if(!loaded){
   const name=select<HTMLInputElement>('#new-name').value
   if(!name.trim()){select<HTMLInputElement>('#new-name').reportValidity();return}
-  if(hasSave&&!window.confirm('開始新冒險會覆寫現有存檔。確定繼續？'))return
   const settings={music:hero.music,sfx:hero.sfx,preferences:{...hero.preferences}}
-  hero=Object.assign(createHero(name,jobIndex),settings)
+  if(!switchCharacter(Object.assign(createHero(name,jobIndex),settings)))return
  }
  if(world.hero!==hero)world.resetRegionState()
  world.hero=hero
@@ -275,7 +289,7 @@ function start(loaded:boolean){
  hero.hp=Math.min(stats.hp,hero.hp);hero.mp=Math.min(stats.mp,hero.mp)
  if(hero.hp<=0)world.revive()
  titleState='play';world.activePlay=true;world.blocked=false;panel=''
- volume(hero.music,hero.sfx,hero.preferences.ambience);pixelPrefs();world.applyDetail();storeProgress();paint();renderPanel()
+ volume(hero.music,hero.sfx,hero.preferences.ambience,hero.preferences.master);pixelPrefs();world.applyDetail();storeProgress();paint();renderPanel()
  message(hero.zone===0?'燼燈村 · 安全區域':zones[hero.zone][0])
 }
 function modal(body:string,extra=''){
@@ -284,6 +298,17 @@ function modal(body:string,extra=''){
 function renderPanel(){
  app.dataset.dock=titleState==='play'&&!!panel&&panel!=='death'?panelMode:'none'
  const root=select('#modal-root')
+ const previousDeck=root.querySelector<HTMLElement>('.trade-deck')
+ const scroll=previousDeck?Array.from(previousDeck.querySelectorAll('.trade-column'),node=>node.scrollTop):[]
+ if(titleState==='roster'){
+  const characters=roster(hasSave?hero:undefined)
+  root.innerHTML=modal(`<div class="dialog-head"><h2>選擇角色</h2>${action('home','回到首頁',icon('close'),'icon-button')}</div>
+   <div class="roster-list">${characters.map(character=>`<article class="roster-character"><img src="${playerArt(character.job)}" alt="">
+    <div><strong>${escape(character.name)}</strong><span>${jobs[character.job].glyph} ${jobs[character.job].name} · 等級 ${character.level}</span></div>
+    <div>${button('character-play:'+character.characterId,'進入冒險','primary')}${button('character-delete:'+character.characterId,'刪除角色','quiet')}</div></article>`).join('')||empty('目前沒有角色。')}</div>
+    ${button('create','新的冒險')}`,'create-modal roster-modal')
+  return
+ }
  if(titleState==='title'){
   root.innerHTML=modal(`
    <div class="title-ornament"><span></span><i>${icon('crest',39)}</i><span></span></div>
@@ -293,7 +318,8 @@ function renderPanel(){
    <div class="title-rule"><i></i></div>
    <p class="title-copy">遠古封印已出現裂痕。<br>循著燼燈的微光，走入暗影。</p>
    <div class="title-buttons">${hasSave?button('continue',icon('arrow',18)+' 繼續冒險','primary'):button('create',icon('sword',18)+' 開始冒險','primary')}${hasSave?button('create','新的冒險','quiet'):''}</div>
-   <div class="title-links">${button('import',icon('book',13)+' 匯入存檔','quiet')}${button('title-help',icon('game',14)+' 操作指南','quiet')}</div>`,'title-modal')
+   ${hasSave?`<p class="character-current">${escape(hero.name)} · ${jobs[hero.job].name} · 等級 ${hero.level}</p>`:''}
+   <div class="title-links">${button('roster','選擇角色','quiet')}${button('import',icon('book',13)+' 匯入存檔','quiet')}${button('title-help',icon('game',14)+' 操作指南','quiet')}</div>`,'title-modal')
   return
  }
  if(titleState==='create'){
@@ -313,17 +339,19 @@ function renderPanel(){
   ${action(panelMode==='minimized'?'panel-expand':'panel-minimize',panelMode==='minimized'?'還原視窗':'縮小視窗',icon(panelMode==='minimized'?'expand':'minus',17),'small-icon')}
   ${action('close','關閉視窗',icon('close',17),'small-icon')}
  </div>`
- root.innerHTML=modal(`<div class="dialog-head"><h2>${sharedTitles[panel]}</h2>${controls}</div>${panelMode==='open'?'<div class="panel-body">'+renderBody()+'</div>':''}`,'dock-panel '+panelMode)
+ root.innerHTML=modal(`<div class="dialog-head"><h2>${sharedTitles[panel]}</h2>${controls}</div>${panelMode==='open'?'<div class="panel-body">'+renderBody()+'</div>':''}`,'dock-panel '+panelMode+(panel==='trade'?' trade-modal':panel==='travel'?' map-modal':''))
+ if(panel==='trade')root.querySelectorAll('.trade-column').forEach((node,i)=>{node.scrollTop=scroll[i]??0})
 
 }
 function questDescription(quest:Quest){
  if(quest.target!==undefined)return '擊敗 '+allMonsters.find(m=>m.id===quest.target)?.name
  return ({move:'在村莊移動',potion:'使用任一藥水',equip:'穿戴一件裝備',forge:'成功強化裝備',learn:'學習或升級技能',shard:'拾取影晶碎片',chest:'打開失落寶箱',hidden:'探索秘徑',boss:'擊敗區域魔王',kill:'擊敗任意魔物',visit:'抵達灰港要塞',rift:'擊退裂隙守衛'} as Record<string,string>)[quest.event]
 }
-function renderBody(){
+function renderBody(view=panel):string{
  const village=safeZone(hero.zone)
- switch(panel){
+ switch(view){
   case 'bag':{
+   const wrap=(rows:string)=>panel==='trade'?'<div class="inventory-grid">'+rows+'</div>':rows
    const tabs=(['all',...Object.keys(bagCategories)] as ('all'|BagCategory)[]).map(tab=>button('bag-tab:'+tab,tab==='all'?'全部':bagCategories[tab],bagTab===tab?'primary':'')).join('')
    const gearRows=orderedGear().filter(g=>bagTab==='all'||bagGearCategory(g)===bagTab).map(g=>row(gearLabel(g),gearDetail(g),
     (compatibleGear(hero,g)?button('equip:'+g.uid,'穿戴'):'')+button('compare:'+g.uid,'比較')+
@@ -333,8 +361,8 @@ function renderBody(){
     (['red','blue','home','warp','blink','morph'].includes(m)?button(m==='home'?'home-item':m,'使用'):'')+
     button('lock:'+m,materialLocked(hero,m)?'解除鎖定':'鎖定'))).join('')
    return `<div class="bag-summary"><b>裝備槽 ${hero.bag.length}/${bagLimit}</b>${button('sort-bag','自動排序')}</div><label class="sale-filter">排序方式 <select id="bag-sort">${Object.entries(sortLabels).map(([id,label])=>`<option value="${id}" ${bagSort===id?'selected':''}>${label}</option>`).join('')}</select></label><div class="tabs bag-tabs">${tabs}</div>`+
-    (compareGear?renderComparison(hero.bag.find(g=>g.uid===compareGear)):'')+
-    (gearRows?group('裝備',gearRows):'')+(itemRows?group('道具堆疊',itemRows):'')+
+    (panel!=='trade'&&compareGear?renderComparison(hero.bag.find(g=>g.uid===compareGear)):'')+
+    (gearRows?group('裝備',wrap(gearRows)):'')+(itemRows?group('道具堆疊',wrap(itemRows)):'')+
     (!gearRows&&!itemRows?empty('此分類沒有道具。'):'')
   }
   case 'shield':return paperDoll()+(village?button('forge',icon('spark',16)+' 前往強化','primary'):'')
@@ -350,24 +378,15 @@ function renderBody(){
    const points=hero.quests[q.id], claimed=hero.claims[q.id]
    return row(q.name,`<span class="quest-text">${questDescription(q)} · ${points??0} / ${q.count}</span>`,claimed?badge('已領取'):points===undefined?button('accept:'+q.id,'接受'):button('track:'+q.id,hero.tracking===q.id?'追蹤中':'追蹤')+(points>=q.count?button('claim:'+q.id,'領取獎勵','primary'):hero.tracking===q.id&&(world.questPoint||q.zone!==undefined&&q.zone!==hero.zone)?button('quest-go','導航'):''))
   }).join('')||empty('這個分類目前沒有可接取的任務。'))
-  case 'skill':return group(jobs[hero.job].name+' · 技能快捷欄',jobs[hero.job].skills.map((skill,i)=>{
-   const rank=hero.skills[i], level=1+i*2, books=rank||1
-   return row(skill.name+' '+badge('鍵位 '+(i+1)),(rank?'階級 '+rank+' · ':'未學習 · ')+skill.mana+' 魔力 · '+skill.cooldown+' 秒冷卻',
-   rank===5?badge('已滿階'):village?button('learn:'+i,(rank?'升級':'學習')+' · '+books+' 書',hero.level<level?'muted':'')+badge('等級 '+level):badge('需在村莊修習'))
-  }).join(''))+empty('持有技能書 '+hero.items.book+' 本')+(village?button('books','向導師購買技能書'):'')
+  case 'skill':return skillTree(village)
+  case 'trade':return `<div class="tabs trade-tabs">${[['sell','出售'],['doll','人物'],['bag','背包']].map(([id,label])=>button('trade-column:'+id,label,tradeColumn===id?'primary':'')).join('')}</div>
+   <div class="trade-deck" data-column="${tradeColumn}"><section class="trade-column trade-sell" aria-label="出售區域">${village?salesPane():empty('回到安全區域即可出售。')}</section>
+   <section class="trade-column trade-character" aria-label="人物紙娃娃">${paperDoll()}</section>
+   <section class="trade-column trade-bag" aria-label="背包及道具">${renderBody('bag')}</section></div>`
   case 'shop':{
    if(!village)return empty('商人位於燼燈村。')+button('home-scroll','使用回城卷軸')
    const mode='<div class="tabs">'+button('shop-tab:buy','購買分頁',shopTab==='buy'?'primary':'')+button('shop-tab:sell','出售分頁',shopTab==='sell'?'primary':'')+'</div>'
-   if(shopTab==='sell'&&itemSaleDraft){
-    const {item,count}=itemSaleDraft
-    return mode+group('確認出售道具',`<p role="status">出售 ${count} 件${materialNames[item]}，可獲得 ${materialSale(item)*count} 金幣。</p>`+
-     button('sale-item-cancel','取消')+button('sale-item-confirm','確認出售','primary'))
-   }
-   if(shopTab==='sell'&&saleDraft)return mode+group('確認出售裝備',equipmentSales())
-   if(shopTab==='sell')return mode+group('出售裝備',equipmentSales())+
-    group('出售道具',materials.filter(m=>hero.items[m]>0).map(m=>row(materialNames[m],materialSale(m)+' 金幣／件 · 持有 '+hero.items[m],
-     !canSellItem(hero,m)?badge(materialLocked(hero,m)?'已鎖定':'任務道具'):
-      `<input aria-label="${materialNames[m]}出售數量" type="number" min="1" max="${hero.items[m]}" value="1">`+button('sell-material:'+m,'出售'))).join('')||empty('沒有可出售的道具。'))
+   if(shopTab==='sell')return mode+button('trade','開啟整備與交易')+salesPane()
    const tabs=[0,1,2,3,8,9].map(n=>button('shop:'+n,vendors[n],n===activeShop?'primary':'')).join('')
    const limit=activeShop===8?3:25
    const grade=activeShop===8?gradeToday():1
@@ -393,13 +412,16 @@ function renderBody(){
     ${button('upgrade','執行強化','primary')}`)+button('forge-select:','更換裝備')
   }
   case 'vault':return village?group('存入裝備',hero.bag.map(g=>row(gearLabel(g),gearDetail(g),button('deposit:'+g.uid,'存入'))).join('')||empty('背包沒有裝備。'))+group('倉庫',hero.vault.map(g=>row(gearLabel(g),gearDetail(g),button('withdraw:'+g.uid,'取出'))).join('')||empty('倉庫是空的。')):empty('請返回燼燈村使用倉庫。')
-  case 'travel':return group('艾瑟蘭王國',
-   group('王國道路',`<div class="road-graph" aria-label="王國分區道路">
-   <div>${zones.slice(8).map(([label],i)=>`<span class="${hero.zone===i+8?'here':''}">${label}</span>`).join('')}</div>
-   <div class="road-joins" aria-label="五條南北接合道路">${'↕ '.repeat(5).trim().split(' ').map(mark=>`<b>${mark}</b>`).join('')}</div>
-   <div>${zones.slice(0,8).map(([label],i)=>`<span class="${hero.zone===i?'here':''}">${label}</span>`).join('')}</div></div>`)+zones.map(([name,level,,,,description],i)=>row(name+' '+badge(i===hero.zone?'所在區域':'等級 '+level),description,
-   i!==hero.zone&&hero.level>=level?(nextDirection(hero.zone,i,hero.level)?button('road-to:'+i,'沿路步行'):'')+
-   (village||hero.items.warp>0?button('travel-to:'+i,village?'傳送':'卷軸傳送'):''):'' )).join(''))+(village?button('restore','在燼燈泉休息'):'')
+  case 'travel':{
+   const tracked=quests.find(quest=>quest.id===hero.tracking&&hero.quests[quest.id]!==undefined&&!hero.claims[quest.id])
+   const objective=tracked?.zone??(tracked&&['move','equip','forge','learn'].includes(tracked.event)?0:undefined)
+   const first=zones[mapSelection]?mapSelection:hero.zone
+   const order=[first,...zones.map((_,i)=>i).filter(i=>i!==first)]
+   return group('艾瑟蘭王國',realmChart(hero.zone,objective,hero.explored,mapSelection)+
+    order.map(i=>{const [name,level,,,,description]=zones[i];return row(name+' '+badge(i===hero.zone?'所在區域':hero.explored[i]?.length?'已探索 · 等級 '+level:'未探索 · 等級 '+level),description,
+     i!==hero.zone&&hero.level>=level?(nextDirection(hero.zone,i,hero.level)?button('road-to:'+i,'沿路步行'):'')+
+     (village||hero.items.warp>0?button('travel-to:'+i,village?'傳送':'卷軸傳送'):''):'' )}).join(''))+(village?button('restore','在燼燈泉休息'):'')
+  }
   case 'codex':return group('成就',achievements.map(a=>row(a.name,a.description,badge(Math.min(hero.stats[a.event]??0,a.count)+' / '+a.count))).join(''))+
    group('變身圖鑑',morphs.map(([name,,move,atk],i)=>row(name,'移速 '+Math.round(move*100)+'% · 攻速 '+Math.round(atk*100)+'%',hero.morphs.includes(i)?button('morph:'+i,'變身'):badge('未解鎖'))).join(''))+
    group('召喚生物',pets.map(p=>row(p[0],p[2])).join(''))+
@@ -407,7 +429,8 @@ function renderBody(){
   case 'settings':return group('畫面與操作',`<label class="volume-row">字體大小 <select id="text-size"><option value="1">小字體</option><option value="1.15" ${hero.preferences.size>=1.1&&hero.preferences.size<1.3?'selected':''}>標準</option><option value="1.35" ${hero.preferences.size>=1.3?'selected':''}>大字體</option></select></label>
    <label class="volume-row">畫質 <select id="detail"><option value="balanced" ${hero.preferences.detail==='balanced'?'selected':''}>標準</option><option value="high" ${hero.preferences.detail==='high'?'selected':''}>高畫質</option><option value="ultra" ${hero.preferences.detail==='ultra'?'selected':''}>極致畫質</option></select></label>
    <label class="volume-row">地面點擊 <select id="click-mode"><option value="move">移動與互動</option><option value="interact" ${hero.preferences.click==='interact'?'selected':''}>只互動，使用搖桿移動</option></select></label>
-   <label class="toggle"><input id="shake" type="checkbox" ${hero.preferences.shake?'checked':''}> 啟用爆擊震動</label>`)+group('音訊',`<label class="volume-row">背景音樂 <input id="music" type="range" min="0" max="1" step="0.05" value="${hero.music}"></label><label class="volume-row">遊戲音效 <input id="sfx" type="range" min="0" max="1" step="0.05" value="${hero.sfx}"></label><label class="volume-row">環境音量 <input id="ambience" type="range" min="0" max="1" step="0.05" value="${hero.preferences.ambience}"></label>`)+
+   <label class="toggle"><input id="shake" type="checkbox" ${hero.preferences.shake?'checked':''}> 啟用爆擊震動</label>
+   ${[['damageText','傷害浮動文字'],['shadows','角色接地陰影'],['effects','戰鬥與環境特效']].map(([key,label])=>`<label class="toggle"><input type="checkbox" data-visual="${key}" ${hero.preferences[key as 'damageText'|'shadows'|'effects']?'checked':''}> ${label}</label>`).join('')}`)+group('音訊',`<label class="volume-row">主音量 <input id="master" type="range" min="0" max="1" step="0.05" value="${hero.preferences.master}"></label><label class="volume-row">背景音樂 <input id="music" type="range" min="0" max="1" step="0.05" value="${hero.music}"></label><label class="volume-row">遊戲音效 <input id="sfx" type="range" min="0" max="1" step="0.05" value="${hero.sfx}"></label><label class="volume-row">環境音量 <input id="ambience" type="range" min="0" max="1" step="0.05" value="${hero.preferences.ambience}"></label>`)+
    group('自動拾取',`<label class="toggle"><input id="pickup-enabled" type="checkbox" ${hero.pickup.enabled?'checked':''}> 自動拾取有效範圍內的戰利品</label>
    <label class="volume-row">拾取距離 <select id="pickup-range">${[65,100,135,165].map(value=>`<option value="${value}" ${value===hero.pickup.range?'selected':''}>${value}</option>`).join('')}</select></label>
    <label class="volume-row">最低裝備品質 <select id="pickup-grade">${quality.map((label,i)=>`<option value="${i}" ${i===hero.pickup.minGrade?'selected':''}>${label}</option>`).join('')}</select></label>
@@ -415,6 +438,34 @@ function renderBody(){
   case 'death':return `<div class="death">${icon('skull',44)}<p>你在暗影中倒下，失去 6% 的金幣。</p>${button('revive','在燼燈村復活','primary')}</div>`
   default:return ''
  }
+}
+const skillEffects:Record<Skill['effect'],string>={hit:'單體攻擊',area:'範圍攻擊',heal:'治療',shield:'減傷護盾',freeze:'攻擊並冰凍',dash:'突進打擊',stealth:'短暫隱身',summon:'召喚夥伴'}
+function skillValue(skill:Skill,rank:number){
+ const boost=1+(Math.max(rank,1)-1)*.18
+ if(skill.effect==='heal')return '恢復生命上限的 '+Math.round(skill.power*boost*100)+'%'
+ if(skill.effect==='shield')return '減傷 '+Math.round(skill.power*100)+'% · '+(5*boost).toFixed(1)+' 秒'
+ if(skill.effect==='stealth')return '隱身 '+(5*boost).toFixed(1)+' 秒'
+ if(skill.effect==='summon')return '召喚 '+pets[skill.power][0]+' · '+Math.round(52*boost)+' 秒'
+ return '攻擊倍率 ×'+(skill.power*boost).toFixed(2)+(skill.effect==='freeze'?' · 冰凍 '+(2.1*boost).toFixed(1)+' 秒':'')
+}
+function skillTree(village:boolean){
+ const job=jobs[hero.job]
+ const lanes=[
+  {label:'戰鬥',icons:job.skills.map((skill,index)=>({skill,index})).filter(({skill})=>['hit','area','freeze','dash'].includes(skill.effect))},
+  {label:'支援',icons:job.skills.map((skill,index)=>({skill,index})).filter(({skill})=>!['hit','area','freeze','dash'].includes(skill.effect))}
+ ]
+ return `<div class="skill-tree" style="--tree-accent:#${job.color.toString(16)}"><div class="tree-root">${job.glyph} ${job.name} · 可用技能書 ${hero.items.book} 本</div>
+ <div class="tree-lanes">${lanes.filter(lane=>lane.icons.length).map(lane=>`<section class="tree-lane"><h3>${lane.label}</h3>${lane.icons.map(({skill,index})=>{
+  const rank=hero.skills[index],level=1+index*2,books=Math.max(1,rank)
+  const available=village&&hero.level>=level&&hero.items.book>=books&&rank<5
+  const state=rank===5?'已滿階':available?(rank?'可升級':'可學習'):rank?'已學習':'尚未解鎖'
+  return `<article class="tree-node ${available?'available':rank?'learned':'unlearned'}">
+   <div class="tree-heading">${icon(skillIcons[index],20)} <strong>${skill.name}</strong> ${badge(state)}</div>
+   <span>階級 ${rank}/5 · 鍵位 ${index+1} · ${skillEffects[skill.effect]}</span>
+   <span>${skillValue(skill,rank)}</span><span>${skill.mana} 魔力 · ${skill.cooldown} 秒冷卻</span>
+   ${rank===5?'':`<span>需求：等級 ${level} · 技能書 ${books} 本${village?'':' · 安全區域'}</span>`}
+   ${available?button('learn:'+index,(rank?'升級':'學習')+' · '+books+' 書','primary'):''}</article>`
+ }).join('')}</section>`).join('')}</div></div>`+(village?button('books','向導師購買技能書'):'')
 }
 function help(){
  return '<p class="help-copy">方向鍵或 WASD 移動，按住 Shift 或將搖桿推到外圈可奔跑，也可點擊地面自動尋路。點擊魔物即可鎖定並自動追擊。</p><div class="help-keys"><span><kbd>SPACE</kbd> 普通攻擊</span><span><kbd>1–5</kbd> 職業技能</span><span><kbd>Q</kbd> 生命藥水</span><span><kbd>R</kbd> 魔力藥水</span><span><kbd>E</kbd> 拾取</span><span><kbd>ESC</kbd> 關閉視窗</span></div>'
@@ -427,7 +478,7 @@ function renderComparison(gear?:Gear){
  const card=(item?:Gear)=>item?'<strong>'+gearLabel(item)+'</strong><p>'+gearDetail(item)+'</p>':'空欄位'
  const stats=[['戰力指標',combatScore(after)-combatScore(before)],['物理攻擊',after.attack-before.attack],['魔法攻擊',after.magic-before.magic],['防禦',after.defense-before.defense],
   ['生命上限',after.hp-before.hp],['魔力上限',after.mp-before.mp],['吸血（百分點）',(after.leech-before.leech)*100]] as const
- return group('比較'+slotLabel(gear.slot),`<div class="comparison"><div><h4>目前裝備</h4>${card(current)}</div><div><h4>背包裝備</h4>${card(gear)}</div></div>
+ return group('比較'+slotLabel(gear.slot),`<div id="gear-comparison" class="comparison"><div><h4>目前裝備</h4>${card(current)}</div><div><h4>背包裝備</h4>${card(gear)}</div></div>
  <div class="stat-grid">${eligible?stats.map(([name,value])=>`<div><span>${name}</span><b class="${value<0?'warning':'advantage'}">${value>0?'+':''}${value.toFixed(1)}</b></div>`).join(''):empty('此裝備不符合職業限制。')}</div>`)
 
 }
@@ -459,10 +510,26 @@ function paperDoll(){
   <div class="doll"><div class="doll-slots">${[2,3,4,9,5].map(slotCard).join('')}</div>
   <div class="doll-portrait"><div class="doll-figure"><img src="${playerArt(hero.job)}" alt="">${equipmentLayers(hero.job,hero.worn)}</div><span>${escape(hero.name)} · ${job.name}</span></div>
   <div class="doll-slots">${[0,1,6,7,8].map(slotCard).join('')}</div></div>`+
+  group('角色屬性',`<div class="doll-vitals"><span>生命 ${Math.ceil(hero.hp)} / ${Math.ceil(stats.hp)}</span><span>魔力 ${Math.ceil(hero.mp)} / ${Math.ceil(stats.mp)}</span>
+   <span>攻速 ${world.attackRate.toFixed(2)} 次／秒</span><span>移速 ${Math.round(world.movementSpeed)} 單位／秒</span>
+   <span>爆擊 ${Math.round(stats.crit*100)}%</span><span>護盾減傷 ${Math.round(world.shieldReduction*100)}%</span></div>`)+
   group(slotLabel(selectedSlot),gear?row(gearLabel(gear),gearDetail(gear),button('unequip:'+selectedSlot,'卸除')+button('lock:'+gear.uid,gearLocked(hero,gear)?'解除鎖定':'鎖定')):empty('此部位尚未裝備。'))+
   (compareGear?renderComparison(hero.bag.find(g=>g.uid===compareGear)):'')+
   group('背包替換裝備',orderedGear().filter(g=>g.slot===selectedSlot).map(g=>row(gearLabel(g),gearDetail(g),
    button('compare:'+g.uid,'比較')+(compatibleGear(hero,g)?button('equip:'+g.uid,'穿戴'):badge('職業不符')))).join('')||empty('背包沒有此部位的裝備。'))
+}
+function canTrade(){return safeZone(hero.zone)&&(panel==='trade'||panel==='shop'&&shopTab==='sell')}
+function salesPane(){
+ if(itemSaleDraft){
+  const {item,count}=itemSaleDraft
+  return group('確認出售道具',`<p role="status">出售 ${count} 件${materialNames[item]}，可獲得 ${materialSale(item)*count} 金幣。</p>`+
+     button('sale-item-cancel','取消')+button('sale-item-confirm','確認出售','primary'))
+ }
+ if(saleDraft)return group('確認出售裝備',equipmentSales())
+ return group('出售裝備',equipmentSales())+
+    group('出售道具',materials.filter(m=>hero.items[m]>0).map(m=>row(materialNames[m],materialSale(m)+' 金幣／件 · 持有 '+hero.items[m],
+     !canSellItem(hero,m)?badge(materialLocked(hero,m)?'已鎖定':'任務道具'):
+      `<input aria-label="${materialNames[m]}出售數量" type="number" min="1" max="${hero.items[m]}" value="1">`+button('sell-material:'+m,'出售'))).join('')||empty('沒有可出售的道具。'))
 }
 function equipmentSales(){
  if(saleDraft){
@@ -530,6 +597,17 @@ function perform(key:string,element:HTMLElement){
  if(type==='home'){
   storeProgress();titleState='title';world.activePlay=false;world.blocked=false;panel='';renderPanel();return
  }
+ if(type==='roster'){titleState='roster';renderPanel();return}
+ if(titleState==='roster'&&(type==='character-play'||type==='character-delete')){
+  const candidate=roster(hasSave?hero:undefined).find(character=>character.characterId===id)
+  if(!candidate)return
+  if(type==='character-play'){if(switchCharacter(candidate))start(true);return}
+  if(!window.confirm('確定要刪除角色「'+candidate.name+'」？'))return
+  if(!window.confirm('此角色的等級、裝備及任務將永久刪除。再次確認？'))return
+  try{const next=deleteCharacter(id,hasSave?hero:undefined);hasSave=!!next;hero=next??createHero('無名旅人',0);renderPanel()}
+  catch{message('無法完成刪除，請確認瀏覽器儲存空間','warn')}
+  return
+ }
  if(type==='create'){titleState='create';jobIndex=hero.job;renderPanel();select('#new-name').focus();return}
  if(type==='continue'){start(true);return}
  if(type==='job'){
@@ -584,10 +662,17 @@ function perform(key:string,element:HTMLElement){
   if(!hero.items.warp){message('需要傳送卷軸','warn');return}
   openPanel('travel');return
  }
+ if(type==='map-zone'&&panel==='travel'&&zones[index]){
+  mapSelection=index
+  const map=select('.realm-scroll'),scroll=map.scrollLeft
+  renderPanel();select('.realm-scroll').scrollLeft=scroll
+  select(`[data-action="map-zone:${index}"]`).focus({preventScroll:true});return
+ }
+ if(type==='trade-column'&&panel==='trade'&&['sell','doll','bag'].includes(id)){tradeColumn=id;renderPanel();return}
  if(type==='shop-tab'&&panel==='shop'&&village){
   shopTab=id==='sell'?'sell':'buy';saleDraft=undefined;itemSaleDraft=undefined;saleSelection.clear();renderPanel();return
  }
- if(panel==='shop'&&shopTab==='sell'&&village){
+ if(canTrade()){
   if(type==='sell'){previewSale([id]);return}
   if(type==='sale-selected'){previewSale(saleSelection);return}
   if(type==='sale-grade'){previewSale(hero.bag.filter(gear=>gear.grade===saleQuality).map(gear=>gear.uid));return}
@@ -618,7 +703,7 @@ function perform(key:string,element:HTMLElement){
  const g=allGear().find(g=>g.uid===id)
  const bagItem=hero.bag.find(g=>g.uid===id)
  if(type==='bag-tab'){bagTab=id==='all'||Object.hasOwn(bagCategories,id)?id as typeof bagTab:'all';renderPanel();return}
- if(type==='doll-slot'&&panel==='shield'&&slots[index]){
+ if(type==='doll-slot'&&(panel==='shield'||panel==='trade')&&slots[index]){
   selectedSlot=index;compareGear='';renderPanel()
   select(`[data-action="doll-slot:${index}"]`).focus({preventScroll:true})
   return
@@ -629,7 +714,13 @@ function perform(key:string,element:HTMLElement){
   storeProgress();renderPanel();return
  }
  if(type==='road-to'&&world.walkToRegion(index)){closePanel();return}
- if(type==='compare'&&bagItem){compareGear=compareGear===id?'':id;renderPanel();return}
+ if(type==='compare'&&bagItem){
+  compareGear=compareGear===id?'':id
+  if(panel==='trade'){tradeColumn='doll';selectedSlot=bagItem.slot}
+  renderPanel()
+  if(panel==='trade'&&compareGear)select('#gear-comparison').scrollIntoView({block:'nearest'})
+  return
+ }
  if(type==='quest-filter'){questFilter=id;renderPanel();return}
  if(type==='equip'&&bagItem&&compatibleGear(hero,bagItem)){
   const previous=hero.worn[bagItem.slot]
@@ -660,7 +751,7 @@ function perform(key:string,element:HTMLElement){
   if(cost>hero.gold||!stock(key,activeShop===8?3:25)){message('金幣不足或已售罄','warn');return}
   hero.bag.push(shopGear(index,grade));hero.gold-=cost;hero.stock[key]=(hero.stock[key]??0)+1
   sound('loot')
- }else if(type==='sell-material'&&panel==='shop'&&shopTab==='sell'&&village&&materials.includes(id as Material)){
+ }else if(type==='sell-material'&&canTrade()&&materials.includes(id as Material)){
   const item=id as Material
   if(!canSellItem(hero,item)){message('此道具無法出售','warn');return}
   const count=element.parentElement?.querySelector('input')?.valueAsNumber??1
@@ -738,9 +829,10 @@ app.addEventListener('click',event=>{
 app.addEventListener('input',event=>{
  const target=event.target as HTMLInputElement
  if(target.id==='music'||target.id==='sfx'){
-  hero[target.id]=Number(target.value);volume(hero.music,hero.sfx,hero.preferences.ambience);storeProgress()
+  hero[target.id]=Number(target.value);volume(hero.music,hero.sfx,hero.preferences.ambience,hero.preferences.master);storeProgress()
  }
- if(target.id==='ambience'){hero.preferences.ambience=Number(target.value);volume(hero.music,hero.sfx,hero.preferences.ambience);storeProgress()}
+ if(target.id==='master'){hero.preferences.master=Number(target.value);volume(hero.music,hero.sfx,hero.preferences.ambience,hero.preferences.master);storeProgress()}
+ if(target.id==='ambience'){hero.preferences.ambience=Number(target.value);volume(hero.music,hero.sfx,hero.preferences.ambience,hero.preferences.master);storeProgress()}
 })
 app.addEventListener('change',async event=>{
  const input=event.target as HTMLInputElement
@@ -748,7 +840,7 @@ app.addEventListener('change',async event=>{
   bagSort=input.value as keyof typeof sortLabels;renderPanel();select('#bag-sort').focus();return
  }
  if(input.id==='sale-quality'){saleQuality=Number(input.value);return}
- if(input.dataset.saleId&&panel==='shop'&&shopTab==='sell'&&!saleDraft){
+ if(input.dataset.saleId&&canTrade()&&!saleDraft){
   const uid=input.dataset.saleId
   if(input.checked)saleSelection.add(uid)
   else saleSelection.delete(uid)
@@ -778,19 +870,21 @@ app.addEventListener('change',async event=>{
   world.applyDetail();storeProgress();return
  }
  if(input.id==='click-mode'){hero.preferences.click=input.value==='interact'?'interact':'move';storeProgress();return}
+ const visual=input.dataset.visual
+ if(visual==='damageText'||visual==='shadows'||visual==='effects'){hero.preferences[visual]=input.checked;storeProgress();return}
  if(input.id==='shake'){hero.preferences.shake=input.checked;storeProgress();return}
  if(input.id==='risk'){confirmRisk=input.checked;return}
  if(input.id==='bless'||input.id==='protect'){confirmRisk=false;renderPanel();return}
  if(input.id!=='import-file'||!input.files?.[0])return
  try{
   const imported=decodeSave(await input.files[0].text())
-  if(hasSave&&!window.confirm('匯入會覆寫現有的本機存檔，確定繼續？'))return
-  save(imported);hero=imported;hasSave=true;titleState='title';start(true);message('存檔已匯入','gold')
+  imported.characterId=createHero(imported.name,imported.job).characterId
+  if(switchCharacter(imported)){start(true);message('存檔已匯入為獨立角色','gold')}
  }catch{message('無法匯入此存檔','warn')}
  finally{input.value=''}
 })
 document.addEventListener('keydown',event=>{
- if(event.key==='Escape'){if(panel)closePanel();else if(titleState==='create'){titleState='title';renderPanel()}return}
+ if(event.key==='Escape'){if(panel)closePanel();else if(titleState==='create'||titleState==='roster'){titleState='title';renderPanel()}return}
  if(titleState!=='play'||world.blocked||event.repeat||event.ctrlKey||event.altKey||event.metaKey)return
  if((event.target as HTMLElement).matches('button,input,select,textarea')&&event.key===' ')return
  const key=event.key.toLowerCase()

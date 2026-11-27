@@ -130,10 +130,18 @@ export function drawWorld(scene:Phaser.Scene,zone:number){
    const shift=(y%32)/4
    ink(g,color(tile,0x201d2a,.37),x,y+15,16,1,.62)
    ink(g,color(tile,0x201d2a,.35),x+shift,y,1,15,.54)
-   if(u>.58)ink(g,color(tile,0xb2a6a0,.26),x+3+shift,y+2,7,1,.61)
+   if(u>.58){
+    ink(g,color(tile,0xc5baa8,.32),x+3+shift,y+2,7,1,.61)
+    g.lineStyle(1,color(tile,0x161a21,.42),.62)
+     .beginPath().moveTo(x+8,y+4).lineTo(x+10,y+7).lineTo(x+14,y+6).strokePath()
+   }
   }else if(u>.28){
    if(organic)grass(g,x+3+r()*10,y+3+r()*9,color(ground,settlement?0x7b7162:0x80a969,.36),u)
-   else{ink(g,color(ground,accent,.16),x+5,y+5,4,2,.6);ink(g,dark,x+8,y+7,5,2,.8)}
+   else{
+    ink(g,color(tile,accent,.21),x+5,y+5,5,1,.7)
+    ink(g,dark,x+8,y+8,5,2,.7)
+    if(u>.65)g.lineStyle(1,color(tile,0xc7b59c,.24),.42).lineBetween(x+1,y+13,x+7,y+9)
+   }
   }
  }
  if(zone===10){

@@ -552,7 +552,7 @@ export class World extends Phaser.Scene {
   this.bursts.push({x:point.x,y:point.y,color,radius,style,start:this.clock,end:this.clock+.42,source:source?{x:source.x,y:source.y}:undefined})
  }
  private float(p:Point,text:string,color:string,critical=false){
-  this.worldText.damage(p,text,color,critical,this.previewFrames)
+  if(this.hero.preferences.damageText)this.worldText.damage(p,text,color,critical,this.previewFrames)
  }
  private setPose(pose:Pose){this.pose=pose;this.poseUntil=this.clock+.29}
  private hurt(mob:Monster,multiplier=1){
@@ -647,7 +647,7 @@ export class World extends Phaser.Scene {
    const k=this.keys
    const dx=this.joystick.x+Number(!!(k?.D.isDown||k?.RIGHT.isDown))-Number(!!(k?.A.isDown||k?.LEFT.isDown))
    const dy=this.joystick.y+Number(!!(k?.S.isDown||k?.DOWN.isDown))-Number(!!(k?.W.isDown||k?.UP.isDown))
-   const speed=187*(this.morph?morphs[this.morph.id][2]:1)*(this.pet?.id===0?1.09:1)
+   const speed=this.movementSpeed
    this.moving=false;this.running=false
    if(dx||dy){
     this.journey=undefined
@@ -756,6 +756,9 @@ export class World extends Phaser.Scene {
   this.loot.push({...riftPoint,gold:zone*93,material:'blink',gear:makeRelic(7,3,zones[zone][1],this.hero.job,zone-8)})
   this.callbacks.message('裂隙已淨化，遺物落在祭壇附近','gold');this.burst(riftPoint,0xe9acf6,116);sound('loot')
  }
+ get movementSpeed(){return 187*(this.morph?morphs[this.morph.id][2]:1)*(this.pet?.id===0?1.09:1)}
+ get attackRate(){return (this.morph?morphs[this.morph.id][3]:1)/attributes(this.hero).interval}
+ get shieldReduction(){return this.shieldUntil>this.clock?this.shield:0}
  private ambient(){
   const g=this.graphics, zone=this.hero.zone, t=this.previewFrames
   if(safeZone(zone)){
@@ -797,7 +800,7 @@ export class World extends Phaser.Scene {
    g.lineStyle(1,accent,.25+pulse*.35).strokeEllipse(p.x,p.y,48+pulse*22,13+pulse*8)
    g.fillStyle(accent,.3+pulse*.4).fillRect(p.x-1,p.y-35+Math.sin(this.previewFrames*2)*13,2,4)
   }
-  for(let i=0;i<(this.display?.reduced?13:hero.preferences.detail==='ultra'?65:hero.preferences.detail==='high'?39:13);i++){
+  if(hero.preferences.effects)for(let i=0;i<(this.display?.reduced?13:hero.preferences.detail==='ultra'?65:hero.preferences.detail==='high'?39:13);i++){
    const x=(i*131+Math.sin(this.previewFrames*.3+i)*58+WIDTH)%WIDTH
    const y=(i*79-this.previewFrames*(6+i%7)+HEIGHT*100)%HEIGHT
    g.fillStyle(zone===0?0xffa762:accent,.14+.32*(.5+.5*Math.sin(this.previewFrames+i))).fillRect(Math.round(x),Math.round(y),i%5===0?3:2,2)
@@ -824,7 +827,7 @@ export class World extends Phaser.Scene {
   const focus=this.target?.hp?this.target:this.boss
   this.worldText.target(focus&&{x:focus.x,y:focus.y-(focus.definition.boss?150:104)},focus?focus.definition.name+' · 等級 '+focus.definition.level:'')
   this.worldText.update(this.cameras.main,this.previewFrames,this.display?.ratio??1,hero)
-  this.ambient()
+  if(hero.preferences.effects)this.ambient()
   this.portraits.begin()
   const visible=(p:Point)=>{
    const camera=this.cameras.main, dx=p.x-(camera.scrollX+camera.width/2),dy=p.y-(camera.scrollY+camera.height/2)
@@ -833,7 +836,7 @@ export class World extends Phaser.Scene {
   const actors:{y:number;render:()=>void}[]=[]
   if(safeZone(zone))npcPoints.forEach((p,i)=>actors.push({y:p.y,render:()=>{
    if(!visible(p))return
-   g.fillStyle(0x130f16,.38).fillEllipse(p.x,p.y+1,37,13)
+   if(hero.preferences.shadows)g.fillStyle(0x130f16,.38).fillEllipse(p.x,p.y+1,37,13)
    this.portraits.draw('npc'+i,townArt(i),p.x,p.y,i===4?83:74,'idle',this.previewFrames+i*.4,1)
    if(i===7)g.fillStyle(0xffc778).fillRect(p.x-1,p.y-66,3,7).fillRect(p.x-1,p.y-57,3,2)
   }}))
@@ -846,7 +849,7 @@ export class World extends Phaser.Scene {
     const pose:Pose=mob.hp<=0?'dead':mob.hurt>this.clock?'hurt':mob.tell?'cast':mob.hitAt-this.clock>.93&&mob.angry?'attack':mob.angry?'walk':'idle'
     const facing=this.direction(hero.x-mob.x,hero.y-mob.y)
     const art=creatureArt(d.name,d.zone,d.boss), height=d.boss?122:art==='slime'?46:art==='spider'?61:74
-    g.fillStyle(0x100d16,.48).fillEllipse(mob.x,mob.y+1,height*.61,height*.23)
+    if(hero.preferences.shadows)g.fillStyle(0x100d16,.48).fillEllipse(mob.x,mob.y+1,height*.61,height*.23)
     this.portraits.draw(mob,art,mob.x,mob.y,height,pose,this.previewFrames+d.id*.4,facing)
     if(mob.hp>0&&(this.target===mob||mob.angry)){
      const width=d.boss?78:39,y=mob.y-height-7
@@ -859,6 +862,14 @@ export class World extends Phaser.Scene {
    const p=this.pet
    const key=['wolf','wraith','guard'][p.id]
    actors.push({y:p.y,render:()=>{
+    if(hero.preferences.effects){
+     const light=0x94d9c0
+     g.lineStyle(1,light,.6).strokeEllipse(p.x,p.y+2,30,11)
+     for(let i=0;i<3;i++){
+      const phase=this.previewFrames*2.8+i*2.094
+      g.fillStyle(light,.5).fillCircle(p.x+Math.cos(phase)*14,p.y-4+Math.sin(phase)*5,1.6)
+     }
+    }
     this.portraits.draw('pet',key,p.x,p.y,47,'walk',this.previewFrames,1)
    }})
   }
@@ -868,13 +879,13 @@ export class World extends Phaser.Scene {
    const mix=this.morph?morphs[this.morph.id]:undefined
    const pose:Pose=this.dead?'dead':this.poseUntil>this.clock?this.pose:this.moving?(this.running?'run':'walk'):'idle'
    const name=mix?['guard','guard','wolf','wraith','guard','dragon'][this.morph!.id]:heroArt(hero.job)
-   g.fillStyle(0x120e16,.49).fillEllipse(hero.x,hero.y+1,43,13)
+   if(hero.preferences.shadows)g.fillStyle(0x120e16,.49).fillEllipse(hero.x,hero.y+1,43,13)
    this.portraits.draw('hero',name,hero.x,hero.y,91,pose,this.previewFrames,this.heading)
    if(hero.worn[1]&&!mix)this.portraits.armor(hero.x,hero.y,this.facing,pose,this.heading)
    if(this.viewportNode.dataset.pose!==this.portraits.heroFrame)this.viewportNode.dataset.pose=this.portraits.heroFrame
    if(this.viewportNode.dataset.facing!==String(this.heading))this.viewportNode.dataset.facing=String(this.heading)
    const weapon=hero.worn[0], armor=hero.worn[3]
-   if(armor&&armor.grade>=2){
+   if(hero.preferences.effects&&armor&&armor.grade>=2){
     const tint=colorNumber(qualityColors[armor.grade])
     g.lineStyle(2,tint,.48).strokeEllipse(hero.x,hero.y+2,46,16)
     g.fillStyle(tint,.11).fillEllipse(hero.x+this.facing*9,hero.y-43,28,48)
@@ -883,12 +894,12 @@ export class World extends Phaser.Scene {
      g.fillStyle(tint,.64).fillCircle(hero.x+Math.cos(a)*29,hero.y-5+Math.sin(a)*9,1.35)
     }
    }
-   if(pose==='cast'){
+   if(hero.preferences.effects&&pose==='cast'){
     const color=jobs[hero.job].color, t=this.previewFrames*8
     g.lineStyle(1.5,color,.52).strokeEllipse(hero.x,hero.y-16,53,19)
     for(let i=0;i<4;i++)g.fillStyle(color,.63).fillCircle(hero.x+Math.cos(t+i*1.57)*24,hero.y-17+Math.sin(t+i*1.57)*8,2)
    }
-   if(weapon&&(weapon.plus>=4||weapon.element!==undefined)){
+   if(hero.preferences.effects&&weapon&&(weapon.plus>=4||weapon.element!==undefined)){
     const c=weapon.element!==undefined&&weapon.identified?elementColors[weapon.element]:colorNumber(qualityColors[weapon.grade])
     const x=hero.x+this.facing*21,y=hero.y-27+Math.sin(this.previewFrames*12)*5
     g.lineStyle(2,c,.73).lineBetween(x-3,y+8,x+this.facing*10,y-5)
@@ -901,6 +912,7 @@ export class World extends Phaser.Scene {
   this.portraits.end()
   this.battleEffects.clear()
   this.bursts=this.bursts.filter(effect=>effect.end>this.clock)
+  if(!hero.preferences.effects)return
   for(const effect of this.bursts){
    const t=(this.clock-effect.start)/(effect.end-effect.start), size=effect.radius*(.22+.78*t)
    if(this.hero.preferences.detail!=='balanced'&&!this.display?.reduced){
@@ -921,7 +933,13 @@ export class World extends Phaser.Scene {
     this.battleEffects.lineStyle(2,effect.color,(1-t)*.8).lineBetween(effect.source.x,effect.source.y-15,x,y)
     this.battleEffects.fillStyle(effect.color,.88).fillCircle(x,y,4)
    }
-   for(let i=0;i<7;i++)this.battleEffects.fillStyle(effect.color,1-t).fillRect(effect.x+Math.cos(i*.91)*size*.58,effect.y-12+Math.sin(i*.91)*size*.43,3,3)
+   const count=this.display?.reduced||hero.preferences.detail==='balanced'?4:9
+   for(let i=0;i<count;i++){
+    const a=i*2.399, distance=size*(.17+(i%3)*.16)
+    const x=effect.x+Math.cos(a)*distance,y=effect.y-13+Math.sin(a)*distance*.58-t*11
+    this.battleEffects.lineStyle(1.25,i%3===0?0xffe9c2:effect.color,(1-t)*.85)
+     .lineBetween(x,y,x+Math.cos(a)*(6-3*t),y+Math.sin(a)*4)
+   }
   }
  }
 }

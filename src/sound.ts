@@ -3,6 +3,8 @@ type Deck={audio:HTMLAudioElement;gain:GainNode;theme?:Theme}
 const scoreUrl=(track:string)=>import.meta.env.BASE_URL+'score-v22/'+track+'.m4a'
 let context:AudioContext|undefined
 let musicBus:GainNode|undefined
+let output:GainNode|undefined
+let master=1
 let decks:Deck[]=[]
 let theme:Theme='title'
 let active=-1
@@ -23,8 +25,9 @@ const startTimes=new Map<string,number>()
 let lastCue=-100
 const fadeSeconds=1.35
 
-export function volume(m:number,s:number,a=ambience){
- music=m;effects=s;ambience=a
+export function volume(m:number,s:number,a=ambience,overall=master){
+ music=m;effects=s;ambience=a;master=overall
+ if(context&&output)output.gain.setTargetAtTime(master,context.currentTime,.12)
  if(context&&musicBus)musicBus.gain.setTargetAtTime(music*.72,context.currentTime,.16)
 }
 function deck(ctx:AudioContext,bus:GainNode):Deck {
@@ -40,9 +43,12 @@ export function unlock(){
  if(!Ctx)return
  if(!context){
   context=new Ctx()
+  output=context.createGain()
+  output.gain.value=master
+  output.connect(context.destination)
   musicBus=context.createGain()
   musicBus.gain.value=music*.72
-  musicBus.connect(context.destination)
+  musicBus.connect(output)
   decks=[deck(context,musicBus),deck(context,musicBus)]
   // Safari keeps gesture approval on the individual media element across source changes.
   // Prime the silent spare deck with the current track during the same trusted gesture.
@@ -115,23 +121,23 @@ async function prepareFoley(ctx:AudioContext){
 }
 function playSample(name:string,level:number){
  const buffer=effectBuffers.get(name)
- if(!context||context.state!=='running'||!level||!buffer)return
+ if(!context||!output||context.state!=='running'||!level||!buffer)return
  const now=context.currentTime
  if(now-(startTimes.get(name)??-1)<.06)return
  startTimes.set(name,now)
  const clip=context.createBufferSource(), gain=context.createGain()
  clip.buffer=buffer;gain.gain.value=level
- clip.connect(gain).connect(context.destination)
+ clip.connect(gain).connect(output)
  clip.start()
 }
 export function sound(kind:string){playSample(kind,effects*.62)}
 export function victory(){
- if(!context||!cueBuffer||!musicBus||context.currentTime-lastCue<2.8)return
+ if(!context||!output||!cueBuffer||!musicBus||context.currentTime-lastCue<2.8)return
  const now=context.currentTime
  lastCue=now
  const cue=context.createBufferSource(), gain=context.createGain()
  cue.buffer=cueBuffer;gain.gain.value=.67
- cue.connect(gain).connect(context.destination)
+ cue.connect(gain).connect(output)
  gain.gain.value*=music
  const bus=musicBus.gain
  bus.cancelScheduledValues(now);bus.setTargetAtTime(music*.28,now,.2);bus.setTargetAtTime(music*.72,now+3,.4)

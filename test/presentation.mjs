@@ -13,31 +13,66 @@ try{
  page.on('pageerror',error=>errors.push(error.message))
  await page.addInitScript(()=>{
   window.played=[]
+  window.sampleLengths=[]
+  const start=AudioBufferSourceNode.prototype.start
+  AudioBufferSourceNode.prototype.start=function(...args){
+   start.apply(this,args)
+   if(this.buffer)window.sampleLengths.push(this.buffer.duration)
+  }
   const play=HTMLMediaElement.prototype.play
   HTMLMediaElement.prototype.play=async function(){
    await play.call(this)
    window.played.push(this.currentSrc)
+   window.lastMedia=this
   }
  })
- const requests=[]
- page.on('request',request=>{if(request.url().includes('/score/'))requests.push(request.url())})
+ const requests=[],art=[]
+ page.on('request',request=>{if(request.url().includes('/score-v22/'))requests.push(request.url());if(request.url().includes('/art-v22/'))art.push(request.url())})
  await page.goto(base)
  await button(page,'開始冒險').waitFor()
+ assert.equal(await page.locator('#app').getAttribute('data-font'),'noto-sans-tc')
+ assert.ok(Number(await page.locator('#game').getAttribute('data-art'))>=40)
+ assert.ok(art.some(url=>url.endsWith('/knight-motion.json')))
+ assert.ok(art.some(url=>url.endsWith('/fountain.webp')))
  assert.deepEqual(requests,[],'initial load must not request music')
+ assert.equal(await page.locator('#app').getAttribute('data-text-size'),'standard')
  assert.ok(await size(page)>1.4,'iPad backing buffer must exceed CSS resolution')
  await button(page,'開始冒險').tap()
  await musicReady(page,'title')
  await page.getByLabel('角色名稱').fill('畫質驗證')
  await button(page,'進入燼燈村').tap()
  await musicReady(page,'village')
+ const resumes=await page.evaluate(()=>{
+  window.lastMedia.pause()
+  return window.played.filter(url=>url.endsWith('/village.m4a')).length
+ })
+ await button(page,'設定').tap()
+ await page.waitForFunction(before=>window.played.filter(url=>url.endsWith('/village.m4a')).length>before,resumes)
+ await button(page,'關閉視窗').tap()
+ const visible=page.locator('#world-text .world-text').filter({hasText:/^藥水商人$/})
+ assert.equal(await visible.evaluate(node=>getComputedStyle(node).fontSize),'13px')
+ assert.equal(await page.locator('.player-title').evaluate(node=>getComputedStyle(node).fontSize),'15px')
+ const perf=await page.evaluate(()=>new Promise(resolve=>{
+  const start=performance.now()
+  let frames=0
+  function tick(time){
+   frames++
+   if(time-start<1700)requestAnimationFrame(tick)
+   else resolve({hz:Math.round(frames*1000/(time-start)),ratio:document.querySelector('#game canvas').width/devicePixelRatio})
+  }
+  requestAnimationFrame(tick)
+ }))
+ assert.ok(perf.hz>=29,'headless iPad scene should reach at least 29 frames per second')
+ console.log('iPad 解析度模擬靜止場景的 requestAnimationFrame 約 '+perf.hz+' FPS')
+
  await button(page,'設定').tap()
  await page.getByLabel('字體大小').selectOption('1.35')
  await page.getByLabel('畫質').selectOption('balanced')
  assert.equal(await size(page),1)
  await page.getByLabel('畫質').selectOption('ultra')
  assert.ok(await size(page)>1.4)
- assert.equal(await page.locator('#app').getAttribute('data-text-size'),'largest')
- const title=await page.getByText('暗影地下城 V2.1',{exact:true}).last()
+ assert.equal(await page.locator('#app').getAttribute('data-text-size'),'large')
+ const title=await page.getByText('暗影地下城 V3.2',{exact:true}).last()
  await title.scrollIntoViewIfNeeded()
  assert.ok(await title.isVisible())
  await button(page,'關閉視窗').tap()
@@ -54,8 +89,17 @@ try{
  await button(page,'開啟區域地圖').tap()
  await page.locator('[data-action="travel-to:1"]').tap()
  await musicReady(page,'forest')
+ await button(page,'設定').tap()
+ await page.getByLabel('環境音量').evaluate(input=>{
+  input.value='0'
+  input.dispatchEvent(new Event('input',{bubbles:true}))
+  input.dispatchEvent(new Event('change',{bubbles:true}))
+ })
+ await button(page,'關閉視窗').tap()
+ const samples=await page.evaluate(()=>window.sampleLengths.length)
  await button(page,'切換自動練功').tap()
  await musicReady(page,'battle')
+ await page.waitForFunction(before=>window.sampleLengths.slice(before).some(length=>length>0&&length<2),samples)
  for(const [zone,x,y,clip] of [[3,177,540,'graveyard'],[6,177,540,'dungeon'],[12,1110,590,'boss']]){
   await button(page,'暗影地下城首頁').tap()
   await page.evaluate(({zone,x,y})=>{
@@ -67,7 +111,18 @@ try{
   await page.reload()
   await button(page,'繼續冒險').tap()
   await musicReady(page,clip)
+  assert.ok(Number(await page.locator('#game').getAttribute('data-maps'))<=2)
  }
  assert.deepEqual(errors,[])
- console.log('iPad 模擬：Retina、特大字體、全螢幕、NPC 觸控、首頁／村莊／森林／墓園／地下城／戰鬥／魔王配樂')
+ const failed=await browser.newContext({serviceWorkers:'block'})
+ const existing=await page.evaluate(()=>localStorage.getItem('shadow-dungeon.v1'))
+ await failed.addInitScript(save=>localStorage.setItem('shadow-dungeon.v1',save),existing)
+ const failedPage=await failed.newPage()
+ await failedPage.route('**/art-v22/knight.webp',route=>route.fulfill({status:404}))
+ await failedPage.goto(base)
+ await failedPage.getByRole('heading',{name:'資源載入失敗'}).waitFor()
+ assert.equal(await failedPage.evaluate(()=>localStorage.getItem('shadow-dungeon.v1')),existing)
+ await failed.close()
+
+ console.log('iPad 模擬：Retina、大字體、全螢幕、NPC 觸控、首頁／村莊／森林／墓園／地下城／戰鬥／魔王配樂')
 }finally{await browser.close()}

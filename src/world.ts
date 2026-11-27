@@ -1,5 +1,5 @@
 import Phaser from 'phaser'
-import { chest, drawWorld, entry, exit, HEIGHT, npcPoints, refuge, rng, secret, sprite, WIDTH } from './art'
+import { chest, drawWorld, entry, exit, HEIGHT, npcPoints, refuge, rng, secret, WIDTH } from './art'
 import type { Obstacle, Pose } from './art'
 import { allMonsters, elements, jobElements, jobs, morphs, pets, qualityColors, quests, rules, safeZone, vendors, zoneRoutes, zones } from './data'
 import type { Gear, Material } from './data'
@@ -10,15 +10,18 @@ import { clearPath, distance as dist, makeRoute } from './navigation'
 import type { Point } from './navigation'
 import { WorldText } from './world-text'
 import { DisplayResolution } from './display'
-import { creatureArt, heroArt, PortraitSprites, preloadPortraits, townArt } from './portrait-sprites'
+import { crossing, directions, edgeAt, edgePoint, landNeighbor, nextDirection, regionNeighbor, regionOffset, roadX, roadY } from './overworld'
+import { addItem, canCollect, collectDrop } from './inventory'
+import type { Drop } from './inventory'
+import type { Direction } from './overworld'
+import { artKeys, creatureArt, heroArt, missingPortraits, motionKeys, PortraitSprites, preloadPortraits, townArt } from './portrait-sprites'
 
 type Monster={definition:typeof allMonsters[number]; x:number;y:number; home:Point; hp:number; max:number; hitAt:number; sleep:number; frozen:number; angry:boolean; hurt:number; tell?:{end:number;x:number;y:number; angle:number; phase:number}}
-type Loot={x:number;y:number; gold:number; material:Material; gear?:Gear}
 type Strike='slash'|'arrow'|'spell'|'ring'
 const riftPoint={x:900,y:535}
 const elementColors=[0xff995f,0x99dfff,0xffd477,0xc785e7,0xffe0a4]
 type Burst={x:number;y:number;end:number;start:number;color:number;radius:number;source?:Point;style:Strike}
-export type WorldCallbacks={message:(text:string,style?:string)=>void; npc:(index:number)=>void; refresh:()=>void; death:()=>void; ready:()=>void}
+export type WorldCallbacks={message:(text:string,style?:string)=>void; npc:(index:number)=>void; refresh:()=>void; death:()=>void; failed:(reason:string)=>void; ready:()=>void}
 const angle=(a:Point,b:Point)=>Math.atan2(b.y-a.y,b.x-a.x)
 const inside=(x:number,y:number)=>x>24&&x<WIDTH-24&&y>28&&y<HEIGHT-24
 const colorNumber=(hex:string)=>parseInt(hex.slice(1),16)
@@ -28,11 +31,12 @@ export class World extends Phaser.Scene {
  activePlay=false
  blocked=false
  auto=false
+ assetCount=0
  joystick:Point={x:0,y:0}
  target?:Monster
  destination?:Point
  mobs:Monster[]=[]
- loot:Loot[]=[]
+ get loot(){return this.hero.drops[this.hero.zone]??=[]}
  obstacles:Obstacle[]=[]
  cooldowns:number[]=[0,0,0,0,0]
  lastAttack=-10
@@ -45,13 +49,19 @@ export class World extends Phaser.Scene {
  clock=0
  private lastTick=0
  private lastCombat=-10
- private background?:Phaser.GameObjects.Image
  private display?:DisplayResolution
  private portraits!:PortraitSprites
  private heading=1
  private graphics!:Phaser.GameObjects.Graphics
+ private battleEffects!:Phaser.GameObjects.Graphics
  private worldText!:WorldText
- private mapCache=new Map<number,Obstacle[]>()
+ private viewportNode!:HTMLElement
+ private mapCache=new Map<number,ReturnType<typeof drawWorld>>()
+ private awaitingMap?:number
+ private journey?:number
+ private readonly regionStates=new Map<number,{mobs:Monster[];guards:Monster[]}>()
+ private lastFullWarning=-10
+ private lastRoadWarning=-10
  private riftGuards:Monster[]=[]
  private running=false
  private bursts:Burst[]=[]
@@ -73,7 +83,17 @@ export class World extends Phaser.Scene {
  constructor(hero:Hero,callbacks:WorldCallbacks){super('world');this.hero=hero;this.callbacks=callbacks}
  preload(){preloadPortraits(this)}
  create(){
+  const missing=missingPortraits(this)
+  if(missing.length){
+   this.callbacks.failed('角色或場景圖像：'+missing.join('、'))
+   this.scene.pause()
+   return
+  }
+  this.assetCount=artKeys.length+2+motionKeys.length
+  this.viewportNode=document.querySelector<HTMLElement>('#game')!
+  this.viewportNode.dataset.art=String(this.assetCount)
   this.graphics=this.add.graphics()
+  this.battleEffects=this.add.graphics().setDepth(3)
   this.portraits=new PortraitSprites(this)
   this.worldText=new WorldText(document.querySelector<HTMLElement>('#world-text')!)
   this.cameras.main.setBounds(0,0,WIDTH,HEIGHT).setRoundPixels(true)
@@ -101,44 +121,108 @@ export class World extends Phaser.Scene {
 
  }
  applyDetail(){this.display?.select()}
- enter(zone:number,position?:Point,silent=false){
+ resetRegionState(){this.regionStates.clear()}
+ private ensureMap(zone:number){
+  let map=this.mapCache.get(zone)
+  if(!map){map=drawWorld(this,zone);this.mapCache.set(zone,map)}
+  return map
+ }
+ private mapNeighbors(){
+  const {zone,x,y}=this.hero
+  const distances={west:x,east:WIDTH-x,north:y,south:HEIGHT-y}
+  return directions.flatMap(direction=>{
+   const id=regionNeighbor(zone,direction)
+   if(id===undefined)return []
+   const horizontal=direction==='west'||direction==='east'
+   const aligned=horizontal?Math.abs(y-roadY)<215:Math.abs(x-roadX)<250
+   return [{id,direction,distance:distances[direction],aligned,horizontal}]
+  }).sort((a,b)=>Number(b.aligned)-Number(a.aligned)||a.distance-b.distance)
+ }
+ private syncMaps(){
+  const zone=this.hero.zone, neighbors=this.mapNeighbors()
+  const limit=navigator.maxTouchPoints>0?2:3
+  const keep=[zone,...neighbors.filter(link=>this.mapCache.has(link.id)).map(link=>link.id)].slice(0,limit)
+  for(const [id,map] of this.mapCache){
+   if(!keep.includes(id)){map.world.destroy();this.textures.remove('map-'+id);this.mapCache.delete(id);continue}
+   const link=neighbors.find(link=>link.id===id)
+   const offset=link?regionOffset(link.direction):{x:0,y:0}
+   map.world.setPosition(offset.x,offset.y)
+  }
+  document.querySelector<HTMLElement>('#game')!.dataset.maps=String(this.mapCache.size)
+ }
+ private cameraBounds(){
+  const camera=this.cameras.main
+  const link=this.mapNeighbors().find(link=>link.aligned&&this.mapCache.has(link.id)&&
+   link.distance<(link.horizontal?camera.width:camera.height)/camera.zoom/2+100)
+  const offset=link?regionOffset(link.direction):{x:0,y:0}
+  camera.setBounds(Math.min(0,offset.x),Math.min(0,offset.y),WIDTH+Math.abs(offset.x),HEIGHT+Math.abs(offset.y))
+ }
+ private prefetch(){
+  const current=this.hero.zone, camera=this.cameras.main
+  const link=this.mapNeighbors().find(link=>link.aligned&&
+   link.distance<(link.horizontal?camera.width:camera.height)/camera.zoom/2+160)
+  if(!link||this.awaitingMap===link.id||this.mapCache.has(link.id))return
+  this.awaitingMap=link.id
+  const prepare=()=>{
+   if(this.awaitingMap!==link.id)return
+   this.awaitingMap=undefined
+   if(this.hero.zone!==current)return
+   this.ensureMap(link.id);this.syncMaps()
+  }
+  if(typeof window.requestIdleCallback==='function')window.requestIdleCallback(prepare,{timeout:130})
+  else window.setTimeout(prepare,16)
+ }
+ enter(zone:number,position?:Point,silent=false,shift=0,shiftY=0){
+  const camera=this.cameras.main
+  if(!shift&&!shiftY)this.journey=undefined
+  const center={x:camera.scrollX+camera.width/2,y:camera.scrollY+camera.height/2}
   this.hero.zone=zone
   this.portraits.reset()
   this.lastCombat=-10
-  this.background?.destroy()
-  const cached=this.mapCache.get(zone)
-  const map=cached
-   ?{world:this.add.image(0,0,'map-'+zone).setOrigin(0).setDisplaySize(WIDTH,HEIGHT).setDepth(-2),obstacles:cached}
-   :drawWorld(this,zone)
-  this.mapCache.delete(zone)
-  this.mapCache.set(zone,map.obstacles)
-  if(this.mapCache.size>2){
-   const oldest=this.mapCache.keys().next().value!
-   this.mapCache.delete(oldest);this.textures.remove('map-'+oldest)
-  }
-  this.background=map.world;this.obstacles=map.obstacles
+  this.obstacles=this.ensureMap(zone).obstacles
   const point=position??(safeZone(zone)?spawn:entry)
-  Object.assign(this.hero,point)
-  if(!this.passable(this.hero.x,this.hero.y))Object.assign(this.hero,safeZone(zone)?spawn:entry)
+  this.hero.x=point.x;this.hero.y=point.y
+  if(!this.passable(this.hero.x,this.hero.y,true))Object.assign(this.hero,safeZone(zone)?spawn:entry)
+  this.syncMaps()
   this.destination=undefined;this.target=undefined;this.interaction=undefined;this.interactionPoint=undefined
-  this.riftGuards=[];this.loot=[];this.bursts=[];this.clickMarker=undefined;this.steerSide=1;this.route=[];this.routeGoal=undefined
+  this.bursts=[];this.clickMarker=undefined;this.steerSide=1;this.route=[];this.routeGoal=undefined
   if(this.pet)Object.assign(this.pet,{x:this.hero.x-24,y:this.hero.y+18})
   this.worldText.reset()
   if(safeZone(zone)){
-   npcPoints.forEach((p,i)=>this.label(p.x,p.y-59-(i%2)*29,vendors[i],i===7?'#e9c780':'#cbc4c7'))
-   this.label(774,523,'燼燈泉 · 恢復','#a9ced1')
+   npcPoints.forEach((p,i)=>this.label(p.x,p.y-81-(i%2)*31,vendors[i],i===7?'#e9c780':'#cbc4c7'))
+   this.label(715,526,'燼燈泉 · 恢復','#a9ced1')
   }else{
    this.label(chest.x,chest.y-25,this.hero.chests.includes(zone)?'空寶箱':'失落寶箱','#e4bf7b')
    this.label(secret.x,secret.y-87,this.hero.hidden.includes(zone)?'隱密神龕':'刻印石門','#d6b2eb')
    this.label(refuge.x,refuge.y-46,'隱密神龕','#d6b2eb')
   }
   const [back,next]=zoneRoutes(zone)
-  if(back>=0)this.label(entry.x,entry.y-96,zones[back][0],'#b1dce1')
+  if(back>=0&&zone!==8)this.label(entry.x,entry.y-96,zones[back][0],'#b1dce1')
+  for(const direction of ['north','south'] as const){
+   const nearby=regionNeighbor(zone,direction)
+   if(nearby===undefined)continue
+   const marker=edgePoint(direction,124)
+   this.label(marker.x,marker.y-36,(direction==='north'?'↑ ':'↓ ')+zones[nearby][0],'#e6cca0')
+  }
   if(next>=0)this.label(exit.x,exit.y-96,zones[next][0],'#e7bd86')
   if(zone>=9)this.label(riftPoint.x,riftPoint.y-43,'不穩定的裂隙','#f0b4ff')
   if(!silent)record(this.hero,'visit')
-  this.populate(zone)
-  this.resize();this.explore()
+  const cached=this.regionStates.get(zone)
+  if(cached){this.mobs=cached.mobs;this.riftGuards=cached.guards}
+  else{this.riftGuards=[];this.populate(zone);this.regionStates.set(zone,{mobs:this.mobs,guards:this.riftGuards})}
+  this.cameraBounds()
+  if(shift||shiftY)camera.centerOn(center.x-shift,center.y-shiftY)
+  else{
+   this.resize()
+   // A direct teleport can put the opposite edge in view immediately.
+   this.prefetch()
+  }
+  this.explore()
+  if(this.journey!==undefined){
+   const next=nextDirection(this.hero.zone,this.journey,this.hero.level)
+   if(next)this.roadDestination(next)
+   else this.journey=undefined
+  }
   if(!silent){this.callbacks.message('抵達 '+zones[zone][0]);this.callbacks.refresh()}
  }
  private label(x:number,y:number,text:string,color:string){this.worldText.label({x,y},text,color)}
@@ -166,16 +250,34 @@ export class World extends Phaser.Scene {
    }
   }
  }
- private passable(x:number,y:number){return inside(x,y)&&this.obstacles.every(o=>Math.hypot(o.x-x,o.y-y)>o.r+6)}
+ private passable(x:number,y:number,allowRoad=false){
+  const edge=allowRoad?edgeAt(x,y,28):undefined
+  const corridor=edge!==undefined&&regionNeighbor(this.hero.zone,edge)!==undefined&&x>-70&&x<WIDTH+70&&y>-70&&y<HEIGHT+70
+  return (inside(x,y)||corridor)&&this.obstacles.every(o=>Math.hypot(o.x-x,o.y-y)>o.r+6)
+ }
  private walk(entity:Point,dx:number,dy:number){
-  const x=entity.x,y=entity.y
-  if(this.passable(entity.x+dx,entity.y))entity.x+=dx
-  if(this.passable(entity.x,entity.y+dy))entity.y+=dy
+  const x=entity.x,y=entity.y, player=entity===this.hero
+  for(const axis of ['x','y'] as const){
+   if(axis==='x'&&!dx||axis==='y'&&!dy)continue
+   const point={x:entity.x+(axis==='x'?dx:0),y:entity.y+(axis==='y'?dy:0)}
+   const edge=player?edgeAt(point.x,point.y):undefined
+   if(edge){
+    const step=crossing(this.hero.zone,this.hero.level,point.x,point.y)
+    if(step){this.enter(step.zone,step,false,step.shift,step.shiftY);return true}
+    const limit=regionNeighbor(this.hero.zone,edge)
+    if(limit!==undefined&&this.clock-this.lastRoadWarning>2.2){
+     this.lastRoadWarning=this.clock
+     this.callbacks.message('前往 '+zones[limit][0]+' 需要等級 '+zones[limit][1],'warn')
+    }
+   }else if(this.passable(point.x,point.y,player)){
+    entity.x=point.x;entity.y=point.y
+   }
+  }
   return dist(entity,{x,y})>.01
  }
  private direction(x:number,y:number){return (Math.round(Math.atan2(y,x)/(Math.PI/4))+8)%8}
  private go(goal:Point,speed:number,dt:number,reach=10){
-  const passable=(x:number,y:number)=>this.passable(x,y)
+  const passable=(x:number,y:number)=>this.passable(x,y,true)
   if(!this.routeGoal||dist(this.routeGoal,goal)>34||this.clock>=this.routeAt){
    this.routeGoal={x:goal.x,y:goal.y};this.routeAt=this.clock+.48
    const direct=dist(this.hero,goal)<28||clearPath(this.hero,goal,passable)
@@ -199,6 +301,7 @@ export class World extends Phaser.Scene {
   this.target=undefined;this.destination=point;this.interaction=action;this.interactionPoint=point;this.routeGoal=undefined
  }
  point(p:Point){
+  this.journey=undefined
   const mob=this.mobs.filter(m=>m.hp>0&&Math.hypot(m.x-p.x,m.y-19-p.y)<(m.definition.boss?44:29)).sort((a,b)=>dist(p,a)-dist(p,b))[0]
   if(mob){this.lock(mob);return}
   const near=(q:Point,size=41)=>dist(p,q)<size||dist(p,{x:q.x,y:q.y-34})<size
@@ -209,7 +312,13 @@ export class World extends Phaser.Scene {
    if(near({x:774,y:510},34)){this.approach({x:774,y:510},()=>this.restore());return}
   }
   const [back,next]=zoneRoutes(zone)
-  if(back>=0&&near(entry,53)){this.approach(entry,()=>this.travel(back,true));return}
+  const west=landNeighbor(zone,-1), east=landNeighbor(zone,1)
+  if(west!==undefined&&(p.x<0||near(entry,53))){this.roadDestination('west');return}
+  if(east!==undefined&&(p.x>=WIDTH||near(exit,53))){this.roadDestination('east');return}
+  for(const direction of ['north','south'] as const){
+   if(regionNeighbor(zone,direction)!==undefined&&(near(edgePoint(direction,124),64)||direction==='north'&&p.y<0||direction==='south'&&p.y>=HEIGHT)){this.roadDestination(direction);return}
+  }
+  if(back>=0&&near(entry,53)){if(zone===8)this.roadDestination('south');else this.approach(entry,()=>this.travel(back,true));return}
   if(next>=0&&near(exit,53)){this.approach(exit,()=>this.travel(next));return}
   if(zone>=9&&near(riftPoint,42)){this.approach(riftPoint,()=>this.activateRift());return}
   if(!safeZone(zone)&&near(chest,33)){this.approach(chest,()=>this.openChest());return}
@@ -220,6 +329,25 @@ export class World extends Phaser.Scene {
   this.target=undefined;this.interaction=undefined;this.interactionPoint=undefined
   this.destination={x:Phaser.Math.Clamp(p.x,26,WIDTH-26),y:Phaser.Math.Clamp(p.y,30,HEIGHT-26)}
   this.routeGoal=undefined;this.clickMarker=this.destination;this.clickUntil=this.clock+.46
+ }
+ walkToRegion(zone:number){
+  const direction=nextDirection(this.hero.zone,zone,this.hero.level)
+  if(!direction)return false
+  this.journey=zone
+  this.roadDestination(direction)
+  return true
+ }
+ private roadDestination(direction:Direction){
+  const next=regionNeighbor(this.hero.zone,direction)
+  if(next===undefined)return
+  if(this.hero.level<zones[next][1]){
+   this.callbacks.message('需要等級 '+zones[next][1],'warn')
+   return
+  }
+  this.approach(edgePoint(direction,44),()=>{
+   this.routeGoal=undefined
+   this.destination=edgePoint(direction,-12)
+  })
  }
  travel(zone:number,back=false){
   if(!zones[zone])return false
@@ -362,15 +490,28 @@ export class World extends Phaser.Scene {
   const point=this.loot.filter(item=>dist(this.hero,item)<310).sort((a,b)=>dist(this.hero,a)-dist(this.hero,b))[0]
   if(point)this.approach(point,()=>this.collect(point))
  }
- private collect(item:Loot){
-  const index=this.loot.indexOf(item)
-  if(index<0)return
-  this.loot.splice(index,1)
-  this.hero.gold+=item.gold;this.hero.items[item.material]++
-  if(item.material==='shard')record(this.hero,'shard')
-  if(item.gear)this.hero.bag.push(item.gear)
-  this.callbacks.message('拾取 '+item.gold+' 金幣'+(item.gear?'與裝備':''),item.gear&&item.gear.grade>=2?'gold':'')
-  sound('loot');this.callbacks.refresh()
+ private autoPickup(){
+  if(!this.hero.pickup.enabled||this.dead)return
+  let changed=false
+  for(const item of [...this.loot]){
+   if(dist(this.hero,item)>this.hero.pickup.range||!canCollect(this.hero,item,true))continue
+   changed=this.collect(item,true)||changed
+  }
+  if(changed)this.callbacks.refresh()
+ }
+ private collect(item:Drop,auto=false){
+  const result=collectDrop(this.hero,item,auto)
+  if(result.full&&this.clock-this.lastFullWarning>2){
+   this.lastFullWarning=this.clock
+   this.callbacks.message('背包已滿，裝備留在地面','warn')
+  }
+  if(!result.gold&&!result.material&&!result.gear)return false
+  if(result.material==='shard')record(this.hero,'shard')
+  const parts=[result.gold?result.gold+' 金幣':'',result.material?'道具':'',result.gear?'裝備':''].filter(Boolean)
+  this.callbacks.message('拾取 '+parts.join('、'),result.gear&&result.gear.grade>=2?'gold':'')
+  sound('loot')
+  if(!auto)this.callbacks.refresh()
+  return true
  }
  private openChest(){
   const zone=this.hero.zone
@@ -386,7 +527,7 @@ export class World extends Phaser.Scene {
   this.cameras.main.centerOn(refuge.x,refuge.y)
   if(this.hero.hidden.includes(zone)){this.callbacks.message('抵達隱密神龕');return}
   this.hero.hidden.push(zone);record(this.hero,'hidden');this.reward(zones[zone][1]*23)
-  this.hero.items.shard+=3;record(this.hero,'shard',3)
+  addItem(this.hero,'shard',3);record(this.hero,'shard',3)
   this.burst(secret,zones[zone][4],83);this.callbacks.message('發現隱藏區域，獲得影晶碎片','gold');this.callbacks.refresh()
  }
  usePotion(kind:'red'|'blue'){
@@ -411,7 +552,7 @@ export class World extends Phaser.Scene {
   this.bursts.push({x:point.x,y:point.y,color,radius,style,start:this.clock,end:this.clock+.42,source:source?{x:source.x,y:source.y}:undefined})
  }
  private float(p:Point,text:string,color:string,critical=false){
-  this.worldText.damage(p,text,color,critical,this.previewFrames)
+  if(this.hero.preferences.damageText)this.worldText.damage(p,text,color,critical,this.previewFrames)
  }
  private setPose(pose:Pose){this.pose=pose;this.poseUntil=this.clock+.29}
  private hurt(mob:Monster,multiplier=1){
@@ -506,9 +647,10 @@ export class World extends Phaser.Scene {
    const k=this.keys
    const dx=this.joystick.x+Number(!!(k?.D.isDown||k?.RIGHT.isDown))-Number(!!(k?.A.isDown||k?.LEFT.isDown))
    const dy=this.joystick.y+Number(!!(k?.S.isDown||k?.DOWN.isDown))-Number(!!(k?.W.isDown||k?.UP.isDown))
-   const speed=187*(this.morph?morphs[this.morph.id][2]:1)*(this.pet?.id===0?1.09:1)
+   const speed=this.movementSpeed
    this.moving=false;this.running=false
    if(dx||dy){
+    this.journey=undefined
     const norm=Math.max(1,Math.hypot(dx,dy))
     this.destination=undefined;this.interaction=undefined;this.interactionPoint=undefined;this.target=undefined
     this.running=!!k?.SHIFT.isDown||Math.hypot(this.joystick.x,this.joystick.y)>.9
@@ -518,8 +660,8 @@ export class World extends Phaser.Scene {
     if(dx)this.facing=dx>0?1:-1
    }else if(!this.interactNear()){
     if(this.auto&&!this.target&&!this.destination){
-     const loot=this.loot.find(item=>dist(hero,item)<125)
-     if(loot)this.approach(loot,()=>this.collect(loot))
+     const drop=this.hero.pickup.enabled?this.loot.find(item=>dist(hero,item)<this.hero.pickup.range+185&&canCollect(hero,item,true)):undefined
+     if(drop)this.approach(drop,()=>{if(this.collect(drop,true))this.callbacks.refresh()})
      else this.target=this.nearest(460)
     }
     if(this.target){
@@ -545,19 +687,24 @@ export class World extends Phaser.Scene {
     if(!this.dead)hero.hp=Math.min(stats.hp,hero.hp+(safeZone(hero.zone)?5:.25))
     hero.mp=Math.min(stats.mp,hero.mp+(safeZone(hero.zone)?4:.65))
     this.explore()
+    this.autoPickup()
    }
    if(this.target?.hp)this.lastCombat=this.clock
    soundtrack(this.boss?'boss':this.clock-this.lastCombat<3?'battle':safeZone(hero.zone)?'village':
     hero.zone===1||hero.zone===10?'forest':hero.zone===3?'graveyard':'dungeon')
   }else{this.moving=false;if(!this.activePlay)soundtrack('title')}
   const camera=this.cameras.main
+  this.cameraBounds()
   const cx=camera.scrollX+camera.width/2,cy=camera.scrollY+camera.height/2
-  camera.centerOn(Phaser.Math.Linear(cx,this.hero.x,Math.min(1,dt*9)),Phaser.Math.Linear(cy,this.hero.y-15,Math.min(1,dt*9)))
+  camera.centerOn(Phaser.Math.Linear(cx,this.hero.x,1-Math.exp(-dt*10)),Phaser.Math.Linear(cy,this.hero.y-15,1-Math.exp(-dt*10)))
+  this.prefetch()
   this.renderWorld()
  }
  navigateQuest(){
   const point=this.questPoint
   if(!point||this.dead)return false
+  const quest=quests.find(q=>q.id===this.hero.tracking)
+  if(quest?.zone!==undefined&&quest.zone!==this.hero.zone)return this.walkToRegion(quest.zone)
   this.point(point)
   this.clickMarker=point;this.clickUntil=this.clock+2
   return true
@@ -567,10 +714,8 @@ export class World extends Phaser.Scene {
   if(!quest||this.hero.claims[quest.id])return undefined
   const zone=this.hero.zone
   if(quest.zone!==undefined&&quest.zone!==zone){
-   const [back,next]=zoneRoutes(zone)
-   if(quest.zone>=8&&zone<8)return zone===0?undefined:entry
-   if(quest.zone<8&&zone>=8)return entry
-   return quest.zone>zone&&next>=0?exit:back>=0?entry:undefined
+   const direction=nextDirection(zone,quest.zone,this.hero.level)
+   return direction?edgePoint(direction,120):undefined
   }
   if(quest.event==='chest')return chest
   if(quest.event==='hidden')return secret
@@ -602,6 +747,7 @@ export class World extends Phaser.Scene {
    return {definition,home,...home,hp:max,max,hitAt:this.clock+1,sleep:0,frozen:0,angry:true,hurt:0}
   })
   this.mobs=[...this.mobs.filter(m=>Number.isFinite(m.sleep)),...this.riftGuards]
+  this.regionStates.set(this.hero.zone,{mobs:this.mobs,guards:this.riftGuards})
   this.callbacks.message('裂隙開啟！擊退兩名守衛','warn');sound('magic')
  }
  private resolveRift(){
@@ -610,16 +756,28 @@ export class World extends Phaser.Scene {
   this.loot.push({...riftPoint,gold:zone*93,material:'blink',gear:makeRelic(7,3,zones[zone][1],this.hero.job,zone-8)})
   this.callbacks.message('裂隙已淨化，遺物落在祭壇附近','gold');this.burst(riftPoint,0xe9acf6,116);sound('loot')
  }
+ get movementSpeed(){return 187*(this.morph?morphs[this.morph.id][2]:1)*(this.pet?.id===0?1.09:1)}
+ get attackRate(){return (this.morph?morphs[this.morph.id][3]:1)/attributes(this.hero).interval}
+ get shieldReduction(){return this.shieldUntil>this.clock?this.shield:0}
  private ambient(){
   const g=this.graphics, zone=this.hero.zone, t=this.previewFrames
   if(safeZone(zone)){
-   for(let i=0;i<7;i++){
-    const x=742+i*10
-    g.lineStyle(1,0xb5ecdd,.20+.22*(.5+.5*Math.sin(t*3+i))).strokeEllipse(x,505+Math.sin(i*2+t*3)*4,12,3)
+   for(let i=0;i<6;i++){
+    const x=758+i*7, progress=(t*1.25+i*.17)%1
+    g.lineStyle(1.4,0xcaf5e6,.11+(1-progress)*.45).strokeEllipse(x,477+Math.sin(i*2+t*3)*3,6+progress*14,2+progress*4)
+    const drop=(i*.26+t*2)%1
+    g.fillStyle(0xd2f7ed,.45).fillCircle(774+Math.sin(i)*2+drop*6,444+drop*30,1+drop*.55)
    }
    for(const [x,y] of [[475,487],[638,480],[912,480],[1120,487],[631,606],[911,606]]){
     for(let j=3;j>0;j--)g.fillStyle(0xff9e52,.023+j*.006).fillEllipse(x,y-16,j*27+Math.sin(t*9+x)*5,j*21)
     g.fillStyle(0xffb36a,.7).fillTriangle(x-4,y-27,x+Math.sin(t*12+x)*3,y-39,x+4,y-27)
+   }
+  }
+  if(!safeZone(zone)&&zone>=3&&this.hero.preferences.detail!=='balanced'&&!this.display?.reduced){
+   for(let i=0;i<6;i++){
+    const x=235+i*202+Math.sin(t*.46+i)*62,y=410+i%3*113+Math.sin(t*.44+i)*16
+    g.fillStyle(zone===5?0xff976b:0xb2b9ce,.028).fillEllipse(x,y,171+i%3*25,24+i%2*6)
+    g.fillStyle(zone===5?0xfe6c53:0xbbc5e5,.029).fillEllipse(x+10,y-2,116,18)
    }
   }
   if(zone===10&&this.hero.preferences.detail!=='balanced'&&!this.display?.reduced){
@@ -635,14 +793,14 @@ export class World extends Phaser.Scene {
   }
  }
   private renderWorld(){
-  const g=this.graphics, hero=this.hero, zone=hero.zone, accent=zones[zone][4], frame=Math.floor(this.previewFrames*7)
+  const g=this.graphics, hero=this.hero, zone=hero.zone, accent=zones[zone][4]
   g.clear()
   for(const p of [entry,exit]){
    const pulse=(Math.sin(this.previewFrames*3.3)+1)/2
    g.lineStyle(1,accent,.25+pulse*.35).strokeEllipse(p.x,p.y,48+pulse*22,13+pulse*8)
    g.fillStyle(accent,.3+pulse*.4).fillRect(p.x-1,p.y-35+Math.sin(this.previewFrames*2)*13,2,4)
   }
-  for(let i=0;i<(this.display?.reduced?13:hero.preferences.detail==='ultra'?65:hero.preferences.detail==='high'?39:13);i++){
+  if(hero.preferences.effects)for(let i=0;i<(this.display?.reduced?13:hero.preferences.detail==='ultra'?65:hero.preferences.detail==='high'?39:13);i++){
    const x=(i*131+Math.sin(this.previewFrames*.3+i)*58+WIDTH)%WIDTH
    const y=(i*79-this.previewFrames*(6+i%7)+HEIGHT*100)%HEIGHT
    g.fillStyle(zone===0?0xffa762:accent,.14+.32*(.5+.5*Math.sin(this.previewFrames+i))).fillRect(Math.round(x),Math.round(y),i%5===0?3:2,2)
@@ -667,9 +825,9 @@ export class World extends Phaser.Scene {
    }
   }
   const focus=this.target?.hp?this.target:this.boss
-  this.worldText.target(focus&&{x:focus.x,y:focus.y-(focus.definition.boss?132:87)},focus?focus.definition.name+' · 等級 '+focus.definition.level:'')
-  this.worldText.update(this.cameras.main,this.previewFrames,this.display?.ratio??1)
-  this.ambient()
+  this.worldText.target(focus&&{x:focus.x,y:focus.y-(focus.definition.boss?150:104)},focus?focus.definition.name+' · 等級 '+focus.definition.level:'')
+  this.worldText.update(this.cameras.main,this.previewFrames,this.display?.ratio??1,hero)
+  if(hero.preferences.effects)this.ambient()
   this.portraits.begin()
   const visible=(p:Point)=>{
    const camera=this.cameras.main, dx=p.x-(camera.scrollX+camera.width/2),dy=p.y-(camera.scrollY+camera.height/2)
@@ -678,8 +836,8 @@ export class World extends Phaser.Scene {
   const actors:{y:number;render:()=>void}[]=[]
   if(safeZone(zone))npcPoints.forEach((p,i)=>actors.push({y:p.y,render:()=>{
    if(!visible(p))return
-   g.fillStyle(0x130f16,.38).fillEllipse(p.x,p.y+1,37,13)
-   if(!this.portraits.draw('npc'+i,townArt(i),p.x,p.y,i===4?68:61,'idle',this.previewFrames+i*.4,1))sprite(g,p.x,p.y,[0xc98276,0xa69b87,0xacb58a,0xb298d1,0xb9906e,0x9d9bae,0x7eb4ba,0xd7af7c,0xb085ab,0xad9bce][i],i%5,'idle',frame+i,1)
+   if(hero.preferences.shadows)g.fillStyle(0x130f16,.38).fillEllipse(p.x,p.y+1,37,13)
+   this.portraits.draw('npc'+i,townArt(i),p.x,p.y,i===4?83:74,'idle',this.previewFrames+i*.4,1)
    if(i===7)g.fillStyle(0xffc778).fillRect(p.x-1,p.y-66,3,7).fillRect(p.x-1,p.y-57,3,2)
   }}))
   for(const mob of this.mobs){
@@ -690,9 +848,9 @@ export class World extends Phaser.Scene {
     if(this.target===mob)g.lineStyle(2,0xf0a572,.9).strokeEllipse(mob.x,mob.y+2,d.boss?62:36,13)
     const pose:Pose=mob.hp<=0?'dead':mob.hurt>this.clock?'hurt':mob.tell?'cast':mob.hitAt-this.clock>.93&&mob.angry?'attack':mob.angry?'walk':'idle'
     const facing=this.direction(hero.x-mob.x,hero.y-mob.y)
-    const art=creatureArt(d.name,d.zone,d.boss), height=d.boss?106:art==='slime'?38:art==='spider'?48:61
-    g.fillStyle(0x100d16,.48).fillEllipse(mob.x,mob.y+1,height*.61,height*.23)
-    if(!this.portraits.draw(mob,art,mob.x,mob.y,height,pose,this.previewFrames+d.id*.4,facing))sprite(g,mob.x,mob.y,d.color,5+d.id,pose,frame+d.id,mob.x>hero.x?-1:1,d.boss)
+    const art=creatureArt(d.name,d.zone,d.boss), height=d.boss?122:art==='slime'?46:art==='spider'?61:74
+    if(hero.preferences.shadows)g.fillStyle(0x100d16,.48).fillEllipse(mob.x,mob.y+1,height*.61,height*.23)
+    this.portraits.draw(mob,art,mob.x,mob.y,height,pose,this.previewFrames+d.id*.4,facing)
     if(mob.hp>0&&(this.target===mob||mob.angry)){
      const width=d.boss?78:39,y=mob.y-height-7
      g.fillStyle(0x211824).fillRect(mob.x-width/2,y,width,4)
@@ -704,7 +862,15 @@ export class World extends Phaser.Scene {
    const p=this.pet
    const key=['wolf','wraith','guard'][p.id]
    actors.push({y:p.y,render:()=>{
-    if(!this.portraits.draw('pet',key,p.x,p.y,41,'walk',this.previewFrames,1))sprite(g,p.x,p.y,pets[p.id][1],7+p.id,'walk',frame,1)
+    if(hero.preferences.effects){
+     const light=0x94d9c0
+     g.lineStyle(1,light,.6).strokeEllipse(p.x,p.y+2,30,11)
+     for(let i=0;i<3;i++){
+      const phase=this.previewFrames*2.8+i*2.094
+      g.fillStyle(light,.5).fillCircle(p.x+Math.cos(phase)*14,p.y-4+Math.sin(phase)*5,1.6)
+     }
+    }
+    this.portraits.draw('pet',key,p.x,p.y,47,'walk',this.previewFrames,1)
    }})
   }
   actors.push({y:hero.y,render:()=>{
@@ -713,11 +879,27 @@ export class World extends Phaser.Scene {
    const mix=this.morph?morphs[this.morph.id]:undefined
    const pose:Pose=this.dead?'dead':this.poseUntil>this.clock?this.pose:this.moving?(this.running?'run':'walk'):'idle'
    const name=mix?['guard','guard','wolf','wraith','guard','dragon'][this.morph!.id]:heroArt(hero.job)
-   g.fillStyle(0x120e16,.49).fillEllipse(hero.x,hero.y+1,43,13)
-   if(!this.portraits.draw('hero',name,hero.x,hero.y,68,pose,this.previewFrames,this.heading))sprite(g,hero.x,hero.y,mix?mix[1]:jobs[hero.job].color,mix?6+this.morph!.id:hero.job,pose,frame,this.facing,false,!!mix)
+   if(hero.preferences.shadows)g.fillStyle(0x120e16,.49).fillEllipse(hero.x,hero.y+1,43,13)
+   this.portraits.draw('hero',name,hero.x,hero.y,91,pose,this.previewFrames,this.heading)
+   if(hero.worn[1]&&!mix)this.portraits.armor(hero.x,hero.y,this.facing,pose,this.heading)
+   if(this.viewportNode.dataset.pose!==this.portraits.heroFrame)this.viewportNode.dataset.pose=this.portraits.heroFrame
+   if(this.viewportNode.dataset.facing!==String(this.heading))this.viewportNode.dataset.facing=String(this.heading)
    const weapon=hero.worn[0], armor=hero.worn[3]
-   if(armor&&armor.grade>=3)g.lineStyle(2,colorNumber(qualityColors[armor.grade]),.6).strokeEllipse(hero.x,hero.y+2,46,16)
-   if(weapon&&(weapon.plus>=4||weapon.element!==undefined)){
+   if(hero.preferences.effects&&armor&&armor.grade>=2){
+    const tint=colorNumber(qualityColors[armor.grade])
+    g.lineStyle(2,tint,.48).strokeEllipse(hero.x,hero.y+2,46,16)
+    g.fillStyle(tint,.11).fillEllipse(hero.x+this.facing*9,hero.y-43,28,48)
+    if(armor.plus>=4)for(let i=0;i<3;i++){
+     const a=this.previewFrames*2+i*Math.PI*2/3
+     g.fillStyle(tint,.64).fillCircle(hero.x+Math.cos(a)*29,hero.y-5+Math.sin(a)*9,1.35)
+    }
+   }
+   if(hero.preferences.effects&&pose==='cast'){
+    const color=jobs[hero.job].color, t=this.previewFrames*8
+    g.lineStyle(1.5,color,.52).strokeEllipse(hero.x,hero.y-16,53,19)
+    for(let i=0;i<4;i++)g.fillStyle(color,.63).fillCircle(hero.x+Math.cos(t+i*1.57)*24,hero.y-17+Math.sin(t+i*1.57)*8,2)
+   }
+   if(hero.preferences.effects&&weapon&&(weapon.plus>=4||weapon.element!==undefined)){
     const c=weapon.element!==undefined&&weapon.identified?elementColors[weapon.element]:colorNumber(qualityColors[weapon.grade])
     const x=hero.x+this.facing*21,y=hero.y-27+Math.sin(this.previewFrames*12)*5
     g.lineStyle(2,c,.73).lineBetween(x-3,y+8,x+this.facing*10,y-5)
@@ -728,25 +910,36 @@ export class World extends Phaser.Scene {
   }})
   actors.sort((a,b)=>a.y-b.y).forEach(a=>a.render())
   this.portraits.end()
+  this.battleEffects.clear()
   this.bursts=this.bursts.filter(effect=>effect.end>this.clock)
+  if(!hero.preferences.effects)return
   for(const effect of this.bursts){
    const t=(this.clock-effect.start)/(effect.end-effect.start), size=effect.radius*(.22+.78*t)
-   g.lineStyle(2,effect.color,(1-t)*.78).strokeEllipse(effect.x,effect.y-7,size*1.3,size*.78)
+   if(this.hero.preferences.detail!=='balanced'&&!this.display?.reduced){
+    for(let band=3;band>=1;band--)this.battleEffects.fillStyle(effect.color,(1-t)*.032).fillEllipse(effect.x,effect.y-13,size+band*13,size*.47+band*8)
+   }
+   this.battleEffects.lineStyle(2,effect.color,(1-t)*.78).strokeEllipse(effect.x,effect.y-7,size*1.3,size*.78)
    if(effect.style==='slash'){
     const facing=effect.source&&effect.x<effect.source.x?-1:1
-    g.lineStyle(4,effect.color,(1-t)*.78).beginPath().arc(effect.x-facing*11,effect.y-22,15+size*.56,facing<0?1.8:-1.35,facing<0?4.55:1.35).strokePath()
+    this.battleEffects.lineStyle(4,effect.color,(1-t)*.78).beginPath().arc(effect.x-facing*11,effect.y-22,15+size*.56,facing<0?1.8:-1.35,facing<0?4.55:1.35).strokePath()
    }
    if(effect.source&&t<.63&&effect.style!=='slash'){
     if(effect.style==='arrow'){
      const direction=angle(effect.source,effect), x=Phaser.Math.Linear(effect.source.x,effect.x,t/.63),y=Phaser.Math.Linear(effect.source.y,effect.y,t/.63)-20
-     g.lineStyle(2,0xffe5ad,.98).lineBetween(x-Math.cos(direction)*18,y-Math.sin(direction)*18,x,y)
+     this.battleEffects.lineStyle(2,0xffe5ad,.98).lineBetween(x-Math.cos(direction)*18,y-Math.sin(direction)*18,x,y)
      continue
     }
     const x=Phaser.Math.Linear(effect.source.x,effect.x,t/.63),y=Phaser.Math.Linear(effect.source.y,effect.y,t/.63)-15
-    g.lineStyle(2,effect.color,(1-t)*.8).lineBetween(effect.source.x,effect.source.y-15,x,y)
-    g.fillStyle(effect.color,.88).fillCircle(x,y,4)
+    this.battleEffects.lineStyle(2,effect.color,(1-t)*.8).lineBetween(effect.source.x,effect.source.y-15,x,y)
+    this.battleEffects.fillStyle(effect.color,.88).fillCircle(x,y,4)
    }
-   for(let i=0;i<7;i++)g.fillStyle(effect.color,1-t).fillRect(effect.x+Math.cos(i*.91)*size*.58,effect.y-12+Math.sin(i*.91)*size*.43,3,3)
+   const count=this.display?.reduced||hero.preferences.detail==='balanced'?4:9
+   for(let i=0;i<count;i++){
+    const a=i*2.399, distance=size*(.17+(i%3)*.16)
+    const x=effect.x+Math.cos(a)*distance,y=effect.y-13+Math.sin(a)*distance*.58-t*11
+    this.battleEffects.lineStyle(1.25,i%3===0?0xffe9c2:effect.color,(1-t)*.85)
+     .lineBetween(x,y,x+Math.cos(a)*(6-3*t),y+Math.sin(a)*4)
+   }
   }
  }
 }

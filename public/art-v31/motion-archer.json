@@ -1,0 +1,64 @@
+{
+  "frames": {
+    "stride-a": {
+      "frame": {
+        "x": 3,
+        "y": 3,
+        "w": 256,
+        "h": 354
+      },
+      "rotated": false,
+      "trimmed": false
+    },
+    "stride-b": {
+      "frame": {
+        "x": 371,
+        "y": 3,
+        "w": 256,
+        "h": 354
+      },
+      "rotated": false,
+      "trimmed": false
+    },
+    "strike": {
+      "frame": {
+        "x": 739,
+        "y": 3,
+        "w": 276,
+        "h": 354
+      },
+      "rotated": false,
+      "trimmed": false
+    },
+    "channel": {
+      "frame": {
+        "x": 3,
+        "y": 371,
+        "w": 292,
+        "h": 354
+      },
+      "rotated": false,
+      "trimmed": false
+    },
+    "recoil": {
+      "frame": {
+        "x": 371,
+        "y": 371,
+        "w": 256,
+        "h": 354
+      },
+      "rotated": false,
+      "trimmed": false
+    },
+    "fall": {
+      "frame": {
+        "x": 739,
+        "y": 371,
+        "w": 354,
+        "h": 256
+      },
+      "rotated": false,
+      "trimmed": false
+    }
+  }
+}

@@ -126,3 +126,81 @@ test('V2.1 graphics presets respect DPR, backing-pixel budget and adaptive fallb
  assert.equal(current.preferences.size,1.35)
  assert.equal(current.bag[0].uid,old.bag[0].uid)
 })
+
+test('walkable boundaries preserve local coordinates and connect all thirteen regions',async()=>{
+ const {crossing,landNeighbor,nextDirection}=await import('../src/overworld.ts')
+ assert.deepEqual(crossing(0,1,1504.5,535),{zone:1,x:4.5,y:535,shift:1500})
+ assert.deepEqual(crossing(1,1,-3.5,552),{zone:0,x:1496.5,y:552,shift:-1500})
+ assert.equal(crossing(1,1,1501,535),undefined)
+ assert.equal(crossing(1,50,1501,650),undefined)
+ assert.equal(landNeighbor(8,-1),undefined)
+ assert.deepEqual(crossing(0,1,760,-3),{zone:8,x:760,y:1021,shift:0,shiftY:-1024})
+ assert.deepEqual(crossing(8,1,758,1027),{zone:0,x:758,y:3,shift:0,shiftY:1024})
+ assert.equal(crossing(1,1,760,-3),undefined)
+ assert.equal(nextDirection(0,8,1),'north')
+ assert.ok(zones.every((_,i)=>i===0||nextDirection(0,i,50)))
+})
+test('partial pickup keeps full-bag and filtered gear on the ground without duplicating rewards',async()=>{
+ const {bagLimit,collectDrop}=await import('../src/inventory.ts')
+ const hero=createHero('拾取驗證',0)
+ while(hero.bag.length<bagLimit)hero.bag.push(makeGear(4,0,1))
+ const gear=makeGear(3,3,5)
+ const drop={x:805,y:520,gold:31,material:'red' as const,gear}
+ hero.drops[0]=[drop]
+ assert.deepEqual(collectDrop(hero,drop,true),{gold:31,material:'red',gear:undefined,full:true})
+ assert.equal(hero.gold,211)
+ assert.equal(hero.items.red,9)
+ assert.equal(hero.drops[0][0].gear?.uid,gear.uid)
+ assert.equal(collectDrop(hero,drop,true).gold,0)
+ const migrated=decodeSave(JSON.stringify(hero))
+ migrated.bag.pop()
+ migrated.pickup.minGrade=4
+ assert.equal(collectDrop(migrated,migrated.drops[0][0],true).gear,undefined)
+ assert.equal(collectDrop(migrated,migrated.drops[0][0]).gear?.uid,gear.uid)
+ assert.equal(migrated.drops[0].length,0)
+ assert.equal(migrated.bag.length,bagLimit)
+ assert.equal(migrated.gold,211)
+})
+test('ground gear cannot duplicate a held UID and locked gear cannot risk destruction',()=>{
+ const hero=createHero('鎖定驗證',0), gear=hero.bag[0]
+ gear.plus=6
+ hero.locks=[gear.uid]
+ assert.match(upgrade(hero,gear,false,false,true),/保護卷軸/)
+ hero.drops[0]=[{x:100,y:100,gold:0,gear:{...gear}}]
+ assert.throws(()=>decodeSave(JSON.stringify(hero)),/重複/)
+})
+
+test('V3.2 quote settles exactly once and protects worn, locked and quest items',async()=>{
+ const {bagGearCategory,bagItemCategory,canSellItem,collectDrop,gearSalePrice,quoteGearSale,sellQuotedGear}=await import('../src/inventory.ts')
+ const hero=createHero('交易驗證',0)
+ const [weapon,locked]=hero.bag
+ delete weapon.acquiredAt
+ hero.bag=[locked]
+ hero.worn[0]=weapon
+ hero.locks=[locked.uid]
+ const rare=makeGear(9,2,10)
+ const ring=makeGear(8,0,5)
+ hero.drops[0]=[{x:805,y:552,gold:2,gear:rare,material:'warp'}]
+ collectDrop(hero,hero.drops[0][0],true)
+ hero.bag.push(ring)
+ assert.equal(bagGearCategory(rare),'armor')
+ assert.equal(bagGearCategory(ring),'accessories')
+ assert.equal(bagItemCategory('warp'),'scrolls')
+ assert.equal(canSellItem(hero,'shard'),false)
+ const loaded=decodeSave(JSON.stringify(hero))
+ assert.equal(loaded.worn[0].acquiredAt,undefined)
+ assert.equal(loaded.bag.find(g=>g.uid===rare.uid)?.slot,9)
+ assert.ok(loaded.itemAcquiredAt.warp)
+ const quote=quoteGearSale(loaded,[weapon.uid,locked.uid,rare.uid,ring.uid,rare.uid])
+ const ids=quote.gear.map(g=>g.uid)
+ assert.equal(quote.total,gearSalePrice(rare)+gearSalePrice(ring))
+ assert.equal(quote.rare,true)
+ assert.equal(sellQuotedGear(loaded,ids,quote.total,false),false)
+ loaded.locks.push(rare.uid)
+ assert.equal(sellQuotedGear(loaded,ids,quote.total,true),false)
+ loaded.locks.pop()
+ assert.equal(sellQuotedGear(loaded,ids,quote.total,true),true)
+ assert.equal(sellQuotedGear(loaded,ids,quote.total,true),false)
+ assert.equal(loaded.gold,182+quote.total)
+ assert.deepEqual(loaded.bag.map(g=>g.uid),[locked.uid])
+})

@@ -1,4 +1,4 @@
-export const slots = ['武器','盾牌','頭盔','盔甲','手套','靴子','披風','項鍊','戒指'] as const
+export const slots = ['武器','盾牌','頭盔','盔甲','手套','靴子','披風','項鍊','戒指','腰帶'] as const
 export const quality = ['普通','優良','稀有','史詩','傳說','神話']
 export const qualityColors = ['#ded1bc','#a7d68a','#83baff','#d6a1ff','#ffcb72','#ff7178']
 export const rules = { maxLevel:50, qualityWeights:[48,27,15,7,2.5,.5], drop:.78, book:.18, materialCuts:[.4,.58,.72,.85], safeWeapon:6, safeArmor:4, maxUpgrade:15, upgrade:[.84,.74,.65,.56,.49,.42,.36,.30,.25,.20,.16], destroy:.24, blessing:.12 }
@@ -61,7 +61,7 @@ export const allMonsters=[...monsters,...expeditionNames.flatMap((names,region)=
 export const elements=['火焰','寒霜','雷電','暗影','神聖'] as const
 export const jobElements=[2,1,0,3,4]
 export const relicNames=['灰港熔鋼','沉星遺產','蒼龍誓約','斷罪神諭','蝕月王印']
-export type Gear = { uid:string; slot:number; grade:number; tier:number; plus:number; roll:number; job?:number; identified:boolean; element?:number; leech?:number; relic?:number }
+export type Gear = { uid:string; slot:number; grade:number; tier:number; plus:number; roll:number; job?:number; identified:boolean; acquiredAt?:number; element?:number; leech?:number; relic?:number }
 const setNames = ['旅人','苔紋','夜銀','星燼','王印','無光']
 export const gearName = (gear:Gear) => (gear.relic===undefined?setNames[gear.grade]:relicNames[gear.relic])+'・'+(gear.slot===0 ? jobs[gear.job??0].weapon : slots[gear.slot])+(gear.plus?' +'+gear.plus:'')
 export const materialNames = { red:'生命藥水',blue:'魔力藥水',weapon:'武器強化卷軸',armor:'防具強化卷軸',bless:'祝福強化卷軸',protect:'裝備保護卷軸',warp:'傳送卷軸',home:'回城卷軸',blink:'瞬間移動卷軸',morph:'變身卷軸',identify:'鑑定卷軸',book:'技能書',shard:'影晶碎片' } as const

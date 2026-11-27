@@ -1,8 +1,10 @@
 export type Theme='title'|'village'|'forest'|'graveyard'|'dungeon'|'battle'|'boss'
 type Deck={audio:HTMLAudioElement;gain:GainNode;theme?:Theme}
-const scoreUrl=(track:string)=>import.meta.env.BASE_URL+'score/'+track+'.m4a'
+const scoreUrl=(track:string)=>import.meta.env.BASE_URL+'score-v22/'+track+'.m4a'
 let context:AudioContext|undefined
 let musicBus:GainNode|undefined
+let output:GainNode|undefined
+let master=1
 let decks:Deck[]=[]
 let theme:Theme='title'
 let active=-1
@@ -17,11 +19,15 @@ let ambienceTimer=0
 let ambienceStep=0
 let cueBuffer:AudioBuffer|undefined
 let cueLoading=false
+let foleyLoading=false
+const effectBuffers=new Map<string,AudioBuffer>()
+const startTimes=new Map<string,number>()
 let lastCue=-100
 const fadeSeconds=1.35
 
-export function volume(m:number,s:number,a=ambience){
- music=m;effects=s;ambience=a
+export function volume(m:number,s:number,a=ambience,overall=master){
+ music=m;effects=s;ambience=a;master=overall
+ if(context&&output)output.gain.setTargetAtTime(master,context.currentTime,.12)
  if(context&&musicBus)musicBus.gain.setTargetAtTime(music*.72,context.currentTime,.16)
 }
 function deck(ctx:AudioContext,bus:GainNode):Deck {
@@ -37,9 +43,12 @@ export function unlock(){
  if(!Ctx)return
  if(!context){
   context=new Ctx()
+  output=context.createGain()
+  output.gain.value=master
+  output.connect(context.destination)
   musicBus=context.createGain()
   musicBus.gain.value=music*.72
-  musicBus.connect(context.destination)
+  musicBus.connect(output)
   decks=[deck(context,musicBus),deck(context,musicBus)]
   // Safari keeps gesture approval on the individual media element across source changes.
   // Prime the silent spare deck with the current track during the same trusted gesture.
@@ -52,6 +61,11 @@ export function unlock(){
  }
  if(context.state!=='running')void context.resume().catch(()=>{})
  if(active<0||retry)selectTheme(theme)
+ else if(decks[active].theme===theme&&decks[active].audio.paused){
+  // Safari can pause the media element independently of the Web Audio graph.
+  void decks[active].audio.play().catch(()=>{retry=true})
+ }
+ if(context)void prepareFoley(context)
  if(!cueLoading&&context){
   cueLoading=true
   fetch(scoreUrl('victory')).then(response=>{
@@ -93,30 +107,37 @@ function selectTheme(next:Theme){
   if(change===transition)retry=true
  })
 }
-function tone(frequency:number,duration:number,level:number,type:OscillatorType,start=0,shift=1){
- if(!context||context.state!=='running'||!level)return
- const at=context.currentTime+start
- const osc=context.createOscillator(), gain=context.createGain()
- osc.type=type
- osc.frequency.setValueAtTime(frequency,at)
- osc.frequency.exponentialRampToValueAtTime(frequency*shift,at+duration)
- gain.gain.setValueAtTime(.0001,at)
- gain.gain.exponentialRampToValueAtTime(Math.max(.0002,level),at+.015)
- gain.gain.exponentialRampToValueAtTime(.0001,at+duration)
- osc.connect(gain).connect(context.destination)
- osc.start(at);osc.stop(at+duration+.03)
+const foley=['hit','arrow','magic','death','loot','forge','fail','heal','wind','brook','cavern']
+async function prepareFoley(ctx:AudioContext){
+ if(foleyLoading)return
+ foleyLoading=true
+ const results=await Promise.allSettled(foley.map(async name=>{
+  if(effectBuffers.has(name))return
+  const response=await fetch(import.meta.env.BASE_URL+'fx-v22/'+name+'.m4a')
+  if(!response.ok)throw Error('Audio unavailable')
+  effectBuffers.set(name,await ctx.decodeAudioData(await response.arrayBuffer()))
+ }))
+ if(results.some(result=>result.status==='rejected'))foleyLoading=false
 }
-const effectsMap:Record<string,number[]>={hit:[155,90],arrow:[520,219,118],magic:[335,512,710],death:[116,72],loot:[523,659,784],forge:[176,262,523],fail:[180,110],heal:[329,440],walk:[65]}
-export function sound(kind:string){
- effectsMap[kind]?.forEach((note,i)=>tone(note,.18,effects*.095,i?'triangle':'square',i*.085,kind==='hit'?.51:.91))
+function playSample(name:string,level:number){
+ const buffer=effectBuffers.get(name)
+ if(!context||!output||context.state!=='running'||!level||!buffer)return
+ const now=context.currentTime
+ if(now-(startTimes.get(name)??-1)<.06)return
+ startTimes.set(name,now)
+ const clip=context.createBufferSource(), gain=context.createGain()
+ clip.buffer=buffer;gain.gain.value=level
+ clip.connect(gain).connect(output)
+ clip.start()
 }
+export function sound(kind:string){playSample(kind,effects*.62)}
 export function victory(){
- if(!context||!cueBuffer||!musicBus||context.currentTime-lastCue<2.8)return
+ if(!context||!output||!cueBuffer||!musicBus||context.currentTime-lastCue<2.8)return
  const now=context.currentTime
  lastCue=now
  const cue=context.createBufferSource(), gain=context.createGain()
  cue.buffer=cueBuffer;gain.gain.value=.67
- cue.connect(gain).connect(context.destination)
+ cue.connect(gain).connect(output)
  gain.gain.value*=music
  const bus=musicBus.gain
  bus.cancelScheduledValues(now);bus.setTargetAtTime(music*.28,now,.2);bus.setTargetAtTime(music*.72,now+3,.4)
@@ -127,9 +148,10 @@ function playAmbience(mode:Theme){
  ambienceTimer=window.setInterval(()=>{
   if(document.hidden)return
   const step=ambienceStep++
-  if(mode==='forest')tone(680+(step%6)*109,.24,ambience*.025,'sine',.1,1.19)
-  else if(mode==='village')tone(373+step%5*47,.17,ambience*.014,'triangle',.16,1.11)
-  else if(mode==='graveyard'||mode==='dungeon')tone(55+step%3*8,2.9,ambience*.028,'sine',0,.84)
+  if(mode==='forest')playSample(step%3===0?'brook':'wind',ambience*.34)
+  else if(mode==='village')playSample('brook',ambience*.28)
+  else if(mode==='graveyard'||mode==='dungeon')playSample('cavern',ambience*.30)
+
  },mode==='dungeon'||mode==='graveyard'?5100:3900)
 }
 export function soundtrack(next:Theme){

@@ -1,11 +1,12 @@
+import { daylight, guardedDamage, trapState } from './epic'
 import Phaser from 'phaser'
 import { chest, drawWorld, entry, exit, HEIGHT, npcPoints, refuge, rng, secret, WIDTH } from './art'
 import type { Obstacle, Pose } from './art'
-import { allMonsters, elements, jobElements, jobs, morphs, pets, qualityColors, quests, rules, safeZone, vendors, zoneRoutes, zones } from './data'
+import { allMonsters, elements, jobElements, jobs, morphs, pets, qualityColors, quests, relicForZone, rules, safeZone, vendors, zoneRoutes, zones } from './data'
 import type { Gear, Material } from './data'
 import { attributes, giveXp, makeGear, makeRelic, qualityRoll, record, rollover, spawn } from './model'
 import type { Hero } from './model'
-import { sound, soundtrack, victory } from './sound'
+import { footstep, sound, soundtrack, victory } from './sound'
 import { clearPath, distance as dist, makeRoute } from './navigation'
 import type { Point } from './navigation'
 import { WorldText } from './world-text'
@@ -17,8 +18,10 @@ import type { Direction } from './overworld'
 import { sampleActors, sampleGround } from './art-sample'
 import { artKeys, creatureArt, heroArt, missingPortraits, motionKeys, PortraitSprites, preloadPortraits, townArt } from './portrait-sprites'
 
-type Monster={definition:typeof allMonsters[number]; x:number;y:number; home:Point; hp:number; max:number; hitAt:number; sleep:number; frozen:number; angry:boolean; hurt:number; tell?:{end:number;x:number;y:number; angle:number; phase:number}}
+type Monster={definition:typeof allMonsters[number]; x:number;y:number; home:Point; hp:number; max:number; hitAt:number; sleep:number; frozen:number; angry:boolean; hurt:number; windup?:number; tell?:{end:number;x:number;y:number; angle:number; phase:number}}
+const defenseReach=(def:Monster['definition'])=>def.ranged?139:def.boss?76:38
 type Strike='slash'|'arrow'|'spell'|'ring'|'frost'|'flame'
+const traps=[{x:545,y:531},{x:963,y:554}]
 const riftPoint={x:900,y:535}
 const elementColors=[0xff995f,0x99dfff,0xffd477,0xc785e7,0xffe0a4]
 type Burst={x:number;y:number;end:number;start:number;color:number;radius:number;source?:Point;style:Strike}
@@ -53,6 +56,11 @@ export class World extends Phaser.Scene {
  private display?:DisplayResolution
  private portraits!:PortraitSprites
  private heading=1
+ private weatherInk!:Phaser.GameObjects.Graphics
+ private nextStep=0
+ private skippedTargets=new WeakMap<Monster,number>()
+ private failedChase=0
+ private trapClaims=[-1,-1]
  private graphics!:Phaser.GameObjects.Graphics
  private battleEffects!:Phaser.GameObjects.Graphics
  private worldText!:WorldText
@@ -90,11 +98,12 @@ export class World extends Phaser.Scene {
    this.scene.pause()
    return
   }
-  this.assetCount=artKeys.length+4+motionKeys.length+sampleActors.length+sampleGround.length
+  this.assetCount=artKeys.length+5+motionKeys.length+sampleActors.length+sampleGround.length
   this.viewportNode=document.querySelector<HTMLElement>('#game')!
   this.viewportNode.dataset.art=String(this.assetCount)
   this.graphics=this.add.graphics()
   this.battleEffects=this.add.graphics().setDepth(3)
+  this.weatherInk=this.add.graphics().setDepth(2)
   this.portraits=new PortraitSprites(this)
   this.worldText=new WorldText(document.querySelector<HTMLElement>('#world-text')!)
   this.cameras.main.setBounds(0,0,WIDTH,HEIGHT).setRoundPixels(true)
@@ -181,6 +190,8 @@ export class World extends Phaser.Scene {
   this.hero.zone=zone
   this.portraits.reset()
   this.lastCombat=-10
+  this.nextStep=this.clock
+  this.trapClaims=[-1,-1]
   this.obstacles=this.ensureMap(zone).obstacles
   const point=position??(safeZone(zone)?spawn:entry)
   this.hero.x=point.x;this.hero.y=point.y
@@ -366,10 +377,17 @@ export class World extends Phaser.Scene {
   this.enter(0,spawn,true);this.restore();this.callbacks.refresh()
  }
  lock(mob:Monster){
+  this.failedChase=0
   this.target=mob;this.destination=undefined;this.interaction=undefined;this.interactionPoint=undefined
  }
- private nearest(range:number){
-  return this.mobs.filter(m=>m.hp>0&&dist(this.hero,m)<range).sort((a,b)=>dist(this.hero,a)-dist(this.hero,b))[0]
+ private nearest(range:number,ignoreSkipped=false){
+  let closest:Monster|undefined
+  for(const mob of this.mobs){
+   if(mob.hp<=0||ignoreSkipped&&(this.skippedTargets.get(mob)??0)>this.clock)continue
+   const distance=dist(this.hero,mob)
+   if(distance<range){range=distance;closest=mob}
+  }
+  return closest
  }
  attack(){
   if(!this.activePlay||this.blocked||this.dead)return
@@ -473,9 +491,9 @@ export class World extends Phaser.Scene {
   const roll=Math.random()
   const [shard,red,armor,weapon]=rules.materialCuts
   const material:Material=def.boss?'bless':roll<rules.book?'book':roll<shard?'shard':roll<red?'red':roll<armor?'armor':roll<weapon?'weapon':'blue'
-  const grade=qualityRoll(Math.random(),def.rank==='世界魔王'?4:def.boss?2:def.rank==='精英'?1:0)
+  const grade=qualityRoll(Math.random(),def.rank==='世界魔王'||def.zone===15&&def.boss?4:def.boss?2:def.rank==='精英'?1:0)
   const slot=Math.floor(Math.random()*9)
-  const gear=def.zone>=9&&(def.boss||grade>=3)?makeRelic(slot,grade,def.level,hero.job,def.zone-8):
+  const gear=def.zone>=9&&(def.boss||grade>=3)?makeRelic(slot,grade,def.level,hero.job,relicForZone(def.zone)):
    def.boss||Math.random()<rules.drop?makeGear(slot,grade,def.level,slot===0?hero.job:undefined):undefined
   this.loot.push({x:mob.x,y:mob.y,gold:(11+def.level*4)*(def.boss?8:1),material,gear})
   if(gear&&grade>=3){sound('loot');this.callbacks.message('高品質裝備已掉落！','gold');this.burst(mob,colorNumber(qualityColors[grade]),91)}
@@ -521,7 +539,7 @@ export class World extends Phaser.Scene {
   const zone=this.hero.zone
   if(this.hero.chests.includes(zone)){this.callbacks.message('這個寶箱已經打開');return}
   this.hero.chests.push(zone);record(this.hero,'chest')
-  this.loot.push({...chest,gold:75*zone,material:'protect',gear:zone>=9?makeRelic((zone+2)%8+1,3,zones[zone][1],this.hero.job,zone-8):makeGear((zone+2)%9,2,zones[zone][1])})
+  this.loot.push({...chest,gold:75*zone,material:'protect',gear:zone>=9?makeRelic((zone+2)%8+1,3,zones[zone][1],this.hero.job,relicForZone(zone)):makeGear((zone+2)%9,2,zones[zone][1])})
   this.collect(this.loot[this.loot.length-1])
   this.callbacks.message('發現失落寶箱','gold')
  }
@@ -566,9 +584,10 @@ export class World extends Phaser.Scene {
   if(Math.random()<stats.evade){this.float(this.hero,'閃避','#c7dade');return}
   const level=mob.definition.level
   const shield=this.shieldUntil>this.clock?this.shield:0
-  const damage=Math.max(1,Math.round(((8+level*3.1)*multiplier-stats.defense)* (1-shield)*(this.pet?.id===2?.82:1)))
+  const {blocked,damage}=guardedDamage(((8+level*3.1)*multiplier-stats.defense)*(1-shield)*(this.pet?.id===2?.82:1),this.hero.worn[1],Math.random())
+  if(blocked){this.burst(this.hero,0xffdf93,37);sound('forge')}
   this.hero.hp=Math.max(0,this.hero.hp-damage)
-  this.float(this.hero,String(damage),'#ff9d94');this.setPose('hurt')
+  this.float(this.hero,blocked?'格擋 '+damage:String(damage),blocked?'#ffe5a6':'#ff9d94');this.setPose('hurt')
   if(this.hero.hp===0){
    this.dead=true;this.auto=false;this.hero.gold=Math.floor(this.hero.gold*.94);sound('death');this.callbacks.death()
   }
@@ -583,13 +602,14 @@ export class World extends Phaser.Scene {
    case 1:return along>=0&&along<length+45&&Math.abs(across)<32+t.phase*7
    case 2:return Math.hypot(dx,dy)<length&&Math.hypot(dx,dy)>43
    case 3:return Math.hypot(dx,dy)<length&&(Math.abs(dx)<37||Math.abs(dy)<37)
+   case 6:return along>=0&&along<length+70&&Math.abs(across)<25+along*.28
    case 5:return Math.hypot(dx,dy)<length+36&&(Math.abs(dx)<25+t.phase*11||Math.abs(dy)<25+t.phase*11||Math.hypot(dx,dy)>105)
    default:return Math.hypot(dx,dy)<length&&Math.abs(Math.atan2(across,along))<.68+t.phase*.18
   }
  }
  private think(mob:Monster,dt:number){
   if(mob.hp<=0){
-   if(this.clock>=mob.sleep){Object.assign(mob,mob.home);mob.hp=mob.max;mob.angry=false;mob.hitAt=this.clock+1}
+   if(this.clock>=mob.sleep){Object.assign(mob,mob.home);mob.hp=mob.max;mob.angry=false;mob.windup=undefined;mob.hitAt=this.clock+1}
    return
   }
   if(mob.tell){
@@ -599,7 +619,17 @@ export class World extends Phaser.Scene {
    }
    return
   }
-  if(mob.frozen>this.clock)return
+  if(mob.frozen>this.clock){mob.windup=undefined;return}
+  if(mob.windup!==undefined){
+   if(this.clock<mob.windup)return
+   mob.windup=undefined
+   const reach=defenseReach(mob.definition)
+   if(dist(mob,this.hero)<=reach+12&&this.line(mob,this.hero)){
+    this.hurt(mob,mob.definition.rank==='精英'?1.4:mob.definition.rank==='稀有'?1.2:1)
+    this.burst(this.hero,mob.definition.color,21,mob.definition.ranged?mob:undefined)
+   }
+   return
+  }
   const d=dist(mob,this.hero), home=dist(mob,mob.home), def=mob.definition
   if(d<(def.boss?249:136)&&this.hiddenUntil<=this.clock)mob.angry=true
   if(home>420||d>465||this.hiddenUntil>this.clock)mob.angry=false
@@ -615,14 +645,13 @@ export class World extends Phaser.Scene {
    if(phase===2&&Math.random()<.44)this.callbacks.message(def.name+' 正在聚集暗影','warn')
    return
   }
-  const range=def.ranged?139:def.boss?76:38
+  const range=defenseReach(def)
   if(d>range||!this.line(mob,this.hero)){
    const a=angle(mob,this.hero), speed=(def.boss?79:76)+phase*9+this.hero.zone*1.7
    for(const offset of [0,.8,-.8,1.55,-1.55])if(this.walk(mob,Math.cos(a+offset)*speed*dt,Math.sin(a+offset)*speed*dt))break
   }else if(this.clock>mob.hitAt){
-   mob.hitAt=this.clock+1.2
-   this.hurt(mob,def.rank==='精英'?1.4:def.rank==='稀有'?1.2:1)
-   this.burst(this.hero,def.color,21,def.ranged?mob:undefined)
+   mob.windup=this.clock+(def.ranged?.34:.23)
+   mob.hitAt=mob.windup+1.05
   }
  }
  private explore(){
@@ -666,19 +695,36 @@ export class World extends Phaser.Scene {
     if(this.auto&&!this.target&&!this.destination){
      const drop=this.hero.pickup.enabled?this.loot.find(item=>dist(hero,item)<this.hero.pickup.range+185&&canCollect(hero,item,true)):undefined
      if(drop)this.approach(drop,()=>{if(this.collect(drop,true))this.callbacks.refresh()})
-     else this.target=this.nearest(460)
+     else{this.target=this.nearest(460,true);this.failedChase=0}
     }
     if(this.target){
      const job=jobs[hero.job]
      if(this.target.hp<=0)this.target=undefined
-     else if(dist(hero,this.target)>job.range-7||!this.line(hero,this.target))this.moving=this.go(this.target,speed,dt,Math.min(48,jobs[hero.job].range-12))
-     else this.basic(this.target)
+     else if(dist(hero,this.target)>job.range-7||!this.line(hero,this.target)){
+      this.moving=this.go(this.target,speed,dt,Math.min(48,job.range-12))
+      this.failedChase=this.moving?0:this.failedChase+dt
+      if(this.auto&&this.failedChase>=1.1){
+       this.skippedTargets.set(this.target,this.clock+4)
+       this.target=undefined
+      }
+     }else{this.failedChase=0;this.basic(this.target)}
     }else if(this.destination){
      if(dist(hero,this.destination)<5)this.destination=undefined
      else this.moving=this.go(this.destination,speed,dt,this.interactionPoint?47:10)
     }
    }
+   if(this.moving&&this.clock>=this.nextStep){
+    footstep(safeZone(hero.zone)||hero.zone>=4&&hero.zone!==10)
+    this.nextStep=this.clock+(this.running?.25:.37)
+   }
    if(this.moving&&!hero.stats.move)record(hero,'move')
+   if(hero.zone===13||hero.zone===14)traps.forEach((trap,i)=>{
+    const {cycle,active}=trapState(this.clock,i)
+    if(!active||cycle===this.trapClaims[i]||dist(hero,trap)>28)return
+    this.trapClaims[i]=cycle
+    const guardian=this.mobs[0]
+    if(guardian){this.hurt(guardian,.65);this.burst(trap,0xffaf84,47)}
+   })
    for(const mob of this.mobs)this.think(mob,dt)
    if(this.pet&&!this.dead){
     const p=this.pet, target=this.target??this.nearest(95), goal=target??{x:hero.x-this.facing*27,y:hero.y+16}
@@ -703,6 +749,7 @@ export class World extends Phaser.Scene {
   camera.centerOn(Phaser.Math.Linear(cx,this.hero.x,1-Math.exp(-dt*10)),Phaser.Math.Linear(cy,this.hero.y-15,1-Math.exp(-dt*10)))
   this.prefetch()
   this.renderWorld()
+  this.renderWeather()
  }
  navigateQuest(){
   const point=this.questPoint
@@ -757,8 +804,33 @@ export class World extends Phaser.Scene {
  private resolveRift(){
   const zone=this.hero.zone
   this.hero.stats['riftDay'+zone]=1;record(this.hero,'rift')
-  this.loot.push({...riftPoint,gold:zone*93,material:'blink',gear:makeRelic(7,3,zones[zone][1],this.hero.job,zone-8)})
+  this.loot.push({...riftPoint,gold:zone*93,material:'blink',gear:makeRelic(7,3,zones[zone][1],this.hero.job,relicForZone(zone))})
   this.callbacks.message('裂隙已淨化，遺物落在祭壇附近','gold');this.burst(riftPoint,0xe9acf6,116);sound('loot')
+ }
+ get atmosphere(){return daylight(this.clock,this.hero.zone)}
+ private renderWeather(){
+  const ink=this.weatherInk, {sun,open,weather}=this.atmosphere
+  ink.clear()
+  if(!open)return
+  const camera=this.cameras.main, w=camera.width/camera.zoom,h=camera.height/camera.zoom
+  if(w<=0||h<=0)return
+  const x=camera.scrollX+(camera.width-w)/2,y=camera.scrollY+(camera.height-h)/2
+  ink.fillStyle(0x19324c,(1-sun)*.23).fillRect(x,y,w,h)
+  if(!this.hero.preferences.effects)return
+  const time=this.previewFrames
+  if(weather==='細雨'){
+   const count=this.hero.preferences.detail==='balanced'||this.display?.reduced?19:58
+   ink.lineStyle(1,0xb9d7e7,.30)
+   for(let i=0;i<count;i++){
+    const px=x+((i*137.3+time*93)%w),py=y+((i*79.1+time*(330+i%7*17))%h)
+    ink.lineBetween(px,py,px-7,py+15)
+   }
+  }else if(weather==='薄霧'){
+   for(let i=0;i<6;i++){
+    const px=x+(i+.2)*w/6+Math.sin(time*.6+i)*26,py=y+h*(.37+i%3*.19)
+    ink.fillStyle(0xbcccca,.046).fillEllipse(px,py,w*.47,28+i*4)
+   }
+  }
  }
  get movementSpeed(){return 187*(this.morph?morphs[this.morph.id][2]:1)*(this.pet?.id===0?1.09:1)}
  get attackRate(){return (this.morph?morphs[this.morph.id][3]:1)/attributes(this.hero).interval}
@@ -799,6 +871,12 @@ export class World extends Phaser.Scene {
   private renderWorld(){
   const g=this.graphics, hero=this.hero, zone=hero.zone, accent=zones[zone][4]
   g.clear()
+  if(zone===13||zone===14)traps.forEach((trap,i)=>{
+   const {warning,active}=trapState(this.clock,i)
+   g.fillStyle(0x151923,.8).fillEllipse(trap.x,trap.y,60,27)
+   g.lineStyle(1,active?0xff9570:warning?0xefc788:0x877b77,.9).strokeEllipse(trap.x,trap.y,57,24)
+   if(active)for(let j=-2;j<=2;j++)g.fillStyle(0xdbc8ba).fillTriangle(trap.x+j*9-4,trap.y+5,trap.x+j*9,trap.y-19,trap.x+j*9+4,trap.y+5)
+  })
   for(const p of [entry,exit]){
    const pulse=(Math.sin(this.previewFrames*3.3)+1)/2
    g.lineStyle(1,accent,.25+pulse*.35).strokeEllipse(p.x,p.y,48+pulse*22,13+pulse*8)
@@ -854,9 +932,13 @@ export class World extends Phaser.Scene {
     const d=mob.definition
     if(d.rank==='精英'&&mob.hp>0)g.lineStyle(1,0xe6af77,.8).strokeEllipse(mob.x,mob.y,39,15)
     if(this.target===mob)g.lineStyle(2,0xf0a572,.9).strokeEllipse(mob.x,mob.y+2,d.boss?62:36,13)
-    const pose:Pose=mob.hp<=0?'dead':mob.hurt>this.clock?'hurt':mob.tell?'cast':mob.hitAt-this.clock>.93&&mob.angry?'attack':mob.angry?'walk':'idle'
+    const pose:Pose=mob.hp<=0?'dead':mob.hurt>this.clock?'hurt':mob.tell?'cast':mob.windup!==undefined?'attack':mob.angry?'walk':'idle'
     const facing=this.direction(hero.x-mob.x,hero.y-mob.y)
     const art=creatureArt(d.name,d.zone,d.boss), height=d.boss?122:art==='slime'?46:art==='spider'?61:74
+    if(mob.windup!==undefined){
+     g.lineStyle(2,0xffc784,.75).strokeEllipse(mob.x,mob.y+1,33,13)
+     g.fillStyle(0xffbc71,.7).fillTriangle(mob.x-4,mob.y-height-14,mob.x+4,mob.y-height-14,mob.x,mob.y-height-7)
+    }
     if(hero.preferences.shadows)g.fillStyle(0x100d16,.48).fillEllipse(mob.x,mob.y+1,height*.61,height*.23)
     this.portraits.draw(mob,art,mob.x,mob.y,height,pose,this.previewFrames+d.id*.4,facing)
     if(mob.hp>0&&(this.target===mob||mob.angry)){

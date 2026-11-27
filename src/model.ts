@@ -1,4 +1,5 @@
-import { achievements, jobs, materialNames, quests, rules, slots, zones } from './data.ts'
+import { setBonus } from './epic.ts'
+import { achievements, jobs, materialNames, quests, relicNames, rules, slots, zones } from './data.ts'
 import type { Detail } from './display.ts'
 import type { Gear, Material } from './data.ts'
 import { categories, defaultPickup } from './inventory.ts'
@@ -45,10 +46,11 @@ export function attributes(hero:Hero){
  const [str,dex,int,con,spi]=job.stats.map((value,i)=>value+(hero.level-1)*job.growth[i])
  const gear=Object.values(hero.worn)
  const weapon=gear.filter(g=>g.slot===0).reduce((total,g)=>total+gearPower(g),0)
+ const set=setBonus(hero.worn)
  const armor=gear.filter(g=>g.slot!==0).reduce((total,g)=>total+gearPower(g),0)
- return { str,dex,int,con,spi,hp:75+con*8+armor*1.4,mp:30+spi*6,attack:9+str*2.2+dex*.55+weapon,magic:11+int*2.75+weapon,
+ return { str,dex,int,con,spi,hp:75+con*8+armor*1.4,mp:30+spi*6,attack:9+str*2.2+dex*.55+weapon+set.damage,magic:11+int*2.75+weapon+set.damage,
   leech:Math.min(.25,(hero.job===3?.065:0)+gear.reduce((total,g)=>total+(g.identified?(g.leech??0)/100:0),0)),
-  defense:con*.55+armor*.48,hit:Math.min(.99,.86+dex*.0022),evade:Math.min(.32,dex*.005),crit:Math.min(.52,.05+dex*.005),interval:job.interval/(1+Math.min(.8,dex*.004)) }
+  defense:con*.55+armor*.48+set.defense,hit:Math.min(.99,.86+dex*.0022),evade:Math.min(.32,dex*.005),crit:Math.min(.52,.05+dex*.005),interval:job.interval/(1+Math.min(.8,dex*.004)) }
 }
 export function qualityRoll(random:number, min=0){
  const weights=rules.qualityWeights.slice(min)
@@ -111,7 +113,7 @@ const finite = (value:unknown,min:number,max:number):value is number => typeof v
 const integerRecord = (value:unknown) => object(value)&&Object.values(value).every(v=>integer(v,0,Number.MAX_SAFE_INTEGER))
 function validGear(value:unknown):value is Gear {
  return object(value)&&typeof value.uid==='string'&&/^[a-z0-9-]{1,90}$/i.test(value.uid)&&integer(value.slot,0,slots.length-1)&&integer(value.grade,0,5)&&integer(value.tier,1,50)&&integer(value.plus,0,15)&&integer(value.roll,1,5)&&(value.element===undefined||integer(value.element,0,4))
-  &&(value.leech===undefined||integer(value.leech,0,12))&&(value.relic===undefined||integer(value.relic,0,4))&&(value.acquiredAt===undefined||integer(value.acquiredAt,0,Number.MAX_SAFE_INTEGER))&&typeof value.identified==='boolean'&&(value.slot!==0||integer(value.job,0,jobs.length-1))
+  &&(value.leech===undefined||integer(value.leech,0,12))&&(value.relic===undefined||integer(value.relic,0,relicNames.length-1))&&(value.acquiredAt===undefined||integer(value.acquiredAt,0,Number.MAX_SAFE_INTEGER))&&typeof value.identified==='boolean'&&(value.slot!==0||integer(value.job,0,jobs.length-1))
 }
 export function decodeSave(json:string):Hero {
  const value:unknown=JSON.parse(json)

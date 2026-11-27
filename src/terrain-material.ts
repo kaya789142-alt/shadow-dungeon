@@ -54,3 +54,25 @@ export function roofMaterial(c:CanvasRenderingContext2D,x:number,y:number,r:()=>
   c.fillStyle=glow;c.fillRect(x+offset-24,y-62,60,60)
  }
 }
+
+export function groundPatches(c:CanvasRenderingContext2D,zone:number,available:(x:number,y:number)=>boolean,random:()=>number){
+ for(let i=0;i<250;i++){
+  const x=138+random()*1224,y=94+random()*836
+  if(!available(x,y))continue
+  const green=random()>.44
+  const radius=12+random()*30
+  const wash=c.createRadialGradient(x,y,0,x,y,radius)
+  const color=green?(zone===0?0x697a4a:0x71845a):0x9d7c58
+  wash.addColorStop(0,tint(color,green?.26:.21))
+  wash.addColorStop(1,tint(color,0))
+  c.fillStyle=wash;c.fillRect(x-radius,y-radius,radius*2,radius*2)
+  if(!green)continue
+  c.strokeStyle=tint(0x9ca56a,.29)
+  c.lineWidth=.65;c.beginPath()
+  for(let blade=0;blade<9;blade++){
+   const gx=x+(random()-.5)*radius,gy=y+(random()-.5)*radius*.5
+   c.moveTo(gx,gy);c.quadraticCurveTo(gx-1,gy-2,gx+(random()-.5)*5,gy-3-random()*5)
+  }
+  c.stroke()
+ }
+}

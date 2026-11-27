@@ -25,7 +25,10 @@ export const zones = [
  ['沉星遺跡',12,0x304649,0x222e32,0x8cd4bd,'大殿長廊藏著通往深層地底的機關。'],
  ['蒼龍谷',34,0x434c37,0x29342e,0xdfc595,'乾涸河谷迴盪著遠古蒼龍的嘶鳴。'],
  ['深淵迴廊・一層',40,0x40434e,0x282531,0xabafcf,'被遺棄的守衛仍徘徊在石階下。'],
- ['深淵迴廊・二層',47,0x492e40,0x281d29,0xef9da5,'血月升起時，世界魔王降臨祭壇。']
+ ['深淵迴廊・二層',47,0x492e40,0x281d29,0xef9da5,'血月升起時，世界魔王降臨祭壇。'],
+ ['亡靈地監・一層',33,0x374143,0x252e35,0xaacccb,'鬆動的石板在寒光下顫動，沿牆前進可避開機關。'],
+ ['亡靈地監・二層',38,0x403649,0x292638,0xcbacd9,'早已掩埋的刑室保存著稀有的亡靈寶物。'],
+ ['魔龍古堡',45,0x55413b,0x35272c,0xf3ab72,'古龍盤據內殿，戰勝後可取得傳說裝備。']
 ] as const
 const creatures = [
  ['苔芽史萊姆','灰脊狼人','尖刺毒蛾','苔冠貝希摩'],
@@ -45,22 +48,26 @@ export const monsters = [...baselineMonsters,...eliteNames.map((name,i)=>({
  id:28+i,zone:i+1,name,rank:'精英',boss:false,ranged:i===2||i===5,color:0xf8bc88,pattern:i%5,level:zones[i+1][1]+2
 }))]
 export const safeZone=(id:number)=>id===0||id===8
-const routes=[[-1,1],[0,2],[1,3],[2,4],[3,5],[4,6],[5,7],[6,-1],[0,9],[8,10],[9,11],[10,12],[11,-1]]
+const routes=[[-1,1],[0,2],[1,3],[2,4],[3,5],[4,6],[5,7],[6,-1],[0,9],[8,10],[9,11],[10,12],[11,13],[12,14],[13,15],[14,-1]]
 export const zoneRoutes=(zone:number)=>routes[zone]
 const expeditionNames=[
  ['沉星巡衛','殘光祭使','灰翎石像','碎星執政官'],
  ['谷底幼龍','峽谷巡翼','琥珀龍裔','蒼翼古龍'],
  ['失誓獄卒','鏡面咒師','蒼鐵吞噬者','門扉看守'],
- ['血月守衛','暮痕祭司','冥火幻獸','世界魔王・蝕月皇']
+ ['血月守衛','暮痕祭司','冥火幻獸','世界魔王・蝕月皇'],
+ ['灰骨戰士','石獄守衛','墳霧幽靈','鎖魂監守'],
+ ['枯血囚徒','裂骨獄卒','幽燼法師','獄鐵亡王'],
+ ['燼翼飛龍','赤銅龍衛','硫火守護者','魔龍・焚宙']
 ]
 export const allMonsters=[...monsters,...expeditionNames.flatMap((names,region)=>names.map((name,i)=>({
  id:35+region*4+i,zone:9+region,name,rank:i===3?(region===3?'世界魔王':'魔王'):i===2?'稀有':i===1?'精英':'普通',
- boss:i===3,ranged:i===1,color:[0x9fc2a6,0xdbc28c,0xca96c0,0xe38e79][i],pattern:region===3?5:(region+2)%5,
+ boss:i===3,ranged:i===1,color:[0x9fc2a6,0xdbc28c,0xca96c0,0xe38e79][i],pattern:region===6?6:region===3?5:(region+2)%5,
  level:Math.min(50,zones[9+region][1]+i)
 })))]
 export const elements=['火焰','寒霜','雷電','暗影','神聖'] as const
 export const jobElements=[2,1,0,3,4]
-export const relicNames=['灰港熔鋼','沉星遺產','蒼龍誓約','斷罪神諭','蝕月王印']
+export const relicForZone=(zone:number)=>zone-8
+export const relicNames=['灰港熔鋼','沉星遺產','蒼龍誓約','斷罪神諭','蝕月王印','灰骨誓言','獄鐵王權','焚宙龍鑄']
 export type Gear = { uid:string; slot:number; grade:number; tier:number; plus:number; roll:number; job?:number; identified:boolean; acquiredAt?:number; element?:number; leech?:number; relic?:number }
 const setNames = ['旅人','苔紋','夜銀','星燼','王印','無光']
 export const gearName = (gear:Gear) => (gear.relic===undefined?setNames[gear.grade]:relicNames[gear.relic])+'・'+(gear.slot===0 ? jobs[gear.job??0].weapon : slots[gear.slot])+(gear.plus?' +'+gear.plus:'')

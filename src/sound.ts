@@ -161,3 +161,26 @@ export function soundtrack(next:Theme){
  selectTheme(next)
  playAmbience(next)
 }
+
+const footsteps=new Map<boolean,AudioBuffer>()
+export function footstep(stone:boolean){
+ if(!context||!output||context.state!=='running'||!effects)return
+ let buffer=footsteps.get(stone)
+ if(!buffer){
+  const rate=context.sampleRate
+  buffer=context.createBuffer(1,Math.round(rate*.085),rate)
+  const pcm=buffer.getChannelData(0)
+  let filtered=0
+  for(let i=0;i<pcm.length;i++){
+   const t=i/rate
+   const noise=Math.random()*2-1
+   filtered+=(noise-filtered)*(stone?.53:.16)
+   pcm[i]=(filtered*.55+Math.sin(t*(stone?920:540))*.21)*Math.exp(-t*(stone?49:37))
+  }
+  footsteps.set(stone,buffer)
+ }
+ const source=context.createBufferSource(),gain=context.createGain()
+ source.buffer=buffer;gain.gain.value=effects*.23
+ source.connect(gain).connect(output)
+ source.start()
+}

@@ -11,6 +11,8 @@ export const artKeys=[...adventurers,...adventurers.map(job=>job+'-back'),...tow
  'flame-demon','fountain','oak','tomb','dungeon-arch','goblin','bone-archer','moth','tree-spirit','gargoyle','dark-lord']
 const directory=import.meta.env.BASE_URL+'art-v22/'
 const motionDirectory=import.meta.env.BASE_URL+'art-v31/'
+const knightActions=['cast-gather','cast-release','hurt-recoil','hurt-brace','death-kneel','death-rest']
+const epicArt=import.meta.env.BASE_URL+'art-v40/'
 const frames=['stride-a','stride-b','strike','channel','recoil','fall']
 export const motionKeys=adventurers.map(job=>'motion-'+job)
 const path=(name:string)=>directory+name+'.webp'
@@ -43,14 +45,16 @@ export function preloadPortraits(scene:Phaser.Scene){
  for(const name of [...sampleGround,...sampleActors])scene.load.image(name,sampleArt(name))
  scene.load.atlas('sample-equipment',sampleArt('equipment'),sampleAtlas)
  scene.load.atlas(directionalTexture,sampleArt('directions'),directionalAtlas)
+ scene.load.atlas('epic-knight',epicArt+'knight-actions.webp',epicArt+'knight-actions.json')
  scene.load.atlas('knight-motion',path('knight-motion'),directory+'knight-motion.json')
  scene.load.image('equipment-art',import.meta.env.BASE_URL+'art-v30/items.webp')
  for(const name of motionKeys)scene.load.atlas(name,motionDirectory+name+'.webp',motionDirectory+name+'.json')
 }
 export function missingPortraits(scene:Phaser.Scene){
- return [...artKeys,'knight-motion','equipment-art',...motionKeys,...sampleGround,...sampleActors,'sample-equipment',directionalTexture].filter(name=>{
+ return [...artKeys,'knight-motion','equipment-art',...motionKeys,...sampleGround,...sampleActors,'sample-equipment',directionalTexture,'epic-knight'].filter(name=>{
   if(name==='sample-equipment'&&(!scene.textures.exists(name)||Array.from({length:10},(_,slot)=>String(slot)).some(slot=>!scene.textures.get(name).has(slot))))return true
   if(name===directionalTexture&&(!scene.textures.exists(name)||['stride','pass','attack','idle'].some(pose=>Array.from({length:8},(_,i)=>i).some(i=>!scene.textures.get(name).has(pose+'-'+i)))))return true
+  if(name==='epic-knight'&&(!scene.textures.exists(name)||knightActions.some(frame=>!scene.textures.get(name).has(frame))))return true
   const source=scene.textures.exists(name)?scene.textures.get(name).getSourceImage():undefined
   return !(source instanceof HTMLImageElement)||source.naturalWidth<(name==='sample-knight-idle'?150:256)||source.naturalHeight<256||motionKeys.includes(name)&&frames.some(frame=>!scene.textures.get(name).has(frame))
  })
@@ -114,11 +118,14 @@ export class PortraitSprites {
   const rear=direction>=5&&direction<=7&&adventurers.includes(name)
   const frame=adventurers.includes(name)&&!rear?(walking?Math.floor(time*(pose==='run'?11:7))%2?'stride-a':'stride-b':
    pose==='attack'&&elapsed>.045?'strike':pose==='cast'?'channel':pose==='hurt'?'recoil':pose==='dead'?'fall':'__BASE'):'__BASE'
-  const directional=name==='knight'&&pose!=='cast'&&pose!=='dead'
-  const texture=directional?directionalTexture:frame!=='__BASE'?'motion-'+name:rear?name+'-back':name
+  const response=name==='knight'&&!rear&&(pose==='cast'||pose==='dead'||pose==='hurt')
+  const directional=name==='knight'&&!response&&pose!=='cast'&&pose!=='dead'
+  const texture=response?'epic-knight':directional?directionalTexture:frame!=='__BASE'?'motion-'+name:rear?name+'-back':name
   const beat=walking?(Math.floor(time*(pose==='run'?11:7))%2?'stride':'pass'):pose==='attack'&&elapsed>.045?'attack':'idle'
-  const spriteFrame=directional?beat+'-'+direction:frame
-  const authored=directional?pose!=='hurt':frame!=='__BASE'
+  const responseFrame=pose==='cast'?elapsed<.10?'cast-gather':'cast-release':
+   pose==='hurt'?elapsed<.11?'hurt-recoil':'hurt-brace':elapsed<.18?'death-kneel':'death-rest'
+  const spriteFrame=response?responseFrame:directional?beat+'-'+direction:frame
+  const authored=response||(directional?pose!=='hurt':frame!=='__BASE')
   if(key==='hero')this.heroFrame=texture+':'+spriteFrame
   let image=this.images.get(key)
   if(!image){
@@ -128,7 +135,7 @@ export class PortraitSprites {
   this.drawn.add(key)
   const source=image.frame
   const sourceWidth=source.realWidth,sourceHeight=source.realHeight
-  const renderedHeight=frame==='fall'?35:height
+  const renderedHeight=response&&pose==='dead'?(spriteFrame==='death-kneel'?58:33):frame==='fall'?35:height
   const width=renderedHeight*sourceWidth/sourceHeight
   const heading=Math.cos(direction*Math.PI/4)
   const facing=heading<-.2?-1:1

@@ -110,7 +110,7 @@ function gate(g:Phaser.GameObjects.Graphics,x:number,y:number,c:number){
 }
 export function drawWorld(scene:Phaser.Scene,zone:number){
  const g=scene.add.graphics(), r=rng(540+zone*127), [, ,ground,dark,accent]=zones[zone], obstacles:Obstacle[]=[]
- const propsArt:{name:string;x:number;y:number;height:number;width?:number;mirror?:boolean}[]=[]
+ const propsArt:{name:string;x:number;y:number;height:number;width?:number;mirror?:boolean;foreground?:boolean}[]=[]
  const cottages=['cottage-blue','cottage-green','cottage-red','cottage-blue','cottage-red']
  const has=(name:string)=>scene.textures.exists(name)
  const settlement=safeZone(zone)
@@ -164,7 +164,7 @@ export function drawWorld(scene:Phaser.Scene,zone:number){
    const shade=color(settlement?0x344744:0x344e44,ground,r()*.5)
    if(has('spruce')){
     const oak=has('oak')&&(Math.round(x*19+y*17)%5<2)
-    propsArt.push({name:oak?'oak':'spruce',x,y,height:(oak?96:103)*s,width:(oak?98:77)*s,mirror:x%2>1})
+    propsArt.push({name:oak?(zone<=1?'sample-oak':'oak'):'spruce',x,y,height:(oak?96:103)*s,width:(oak?98:77)*s,mirror:x%2>1,foreground:oak&&zone<=1})
     for(let i=0;i<40;i++)r()
    }else pine(g,x,y,s,shade,r)
   }
@@ -180,12 +180,12 @@ export function drawWorld(scene:Phaser.Scene,zone:number){
  if(settlement){
   const houses=[[568,424,0x514653],[752,401,0x53465d],[944,420,0x61434b],[1054,648,0x574254],[519,650,0x55424d]]
   for(const [index,[x,y,c]] of houses.entries()){
-   const name=cottages[index]
-   if(has(name))propsArt.push({name,x,y,height:144,width:155,mirror:index===2||index===4})
+   const name=zone===0?['sample-inn','sample-house','sample-forge','sample-inn','sample-house'][index]:cottages[index]
+   if(has(name))propsArt.push({name,x,y,height:144,width:155,mirror:index===2||index===4,foreground:zone===0})
    else house(g,x,y,c,r)
    obstacles.push({x,y:y-24,r:37})
   }
-  if(has('fountain'))propsArt.push({name:'fountain',x:774,y:513,height:119,width:124})
+  if(has('fountain'))propsArt.push({name:zone===0?'sample-fountain':'fountain',x:774,y:513,height:111,width:124,foreground:zone===0})
   else fountain(g,774,510)
   obstacles.push({x:774,y:501,r:35})
   for(const [x,y] of [[487,454],[565,474],[710,439],[840,445],[925,467],[1095,522],[594,674],[646,673],[947,673]]){
@@ -257,7 +257,7 @@ export function drawWorld(scene:Phaser.Scene,zone:number){
   if(has('arch'))propsArt.push({name:zone>=4&&has('dungeon-arch')?'dungeon-arch':'arch',...secret,height:98,width:84})
  }
  gate(g,entry.x,entry.y,0x76b1c2);gate(g,exit.x,exit.y,accent)
- if(has('arch'))for(const point of [entry,exit])propsArt.push({name:zone>=4&&has('dungeon-arch')?'dungeon-arch':'arch',...point,height:103,width:88})
+ if(has('arch'))for(const point of [entry,exit])propsArt.push({name:zone<=1?'sample-gate':zone>=4&&has('dungeon-arch')?'dungeon-arch':'arch',...point,height:103,width:88})
  const key='map-'+zone
  const texture=scene.textures.createCanvas(key,WIDTH*2,HEIGHT*2)!
  g.setScale(2).generateTexture(key,WIDTH*2,HEIGHT*2)
@@ -336,6 +336,7 @@ export function drawWorld(scene:Phaser.Scene,zone:number){
  }
  c.globalAlpha=1
  c.imageSmoothingEnabled=true;c.imageSmoothingQuality='high'
+ const foreground:{x:number;y:number;sprite:Phaser.GameObjects.Image}[]=[]
  for(const prop of propsArt.sort((a,b)=>a.y-b.y)){
   const source=scene.textures.get(prop.name).getSourceImage()
   if(!(source instanceof HTMLImageElement))continue
@@ -344,13 +345,19 @@ export function drawWorld(scene:Phaser.Scene,zone:number){
   const shadow=c.createRadialGradient(3,2,0,3,2,width*.42)
   shadow.addColorStop(0,'#080b0e80');shadow.addColorStop(1,'#080b0e00')
   c.save();c.scale(1,.31);c.fillStyle=shadow;c.fillRect(-width*.6,-width*.44,width*1.2,width);c.restore()
-  if(prop.mirror)c.scale(-1,1)
-  c.drawImage(source,-width*.5,-prop.height,width,prop.height)
+  if(prop.foreground){
+   const sprite=scene.add.image(prop.x,prop.y,prop.name).setOrigin(.5,1)
+    .setDisplaySize(width,prop.height).setFlipX(!!prop.mirror).setDepth(1+prop.y/2000)
+   foreground.push({x:prop.x,y:prop.y,sprite})
+  }else{
+   if(prop.mirror)c.scale(-1,1)
+   c.drawImage(source,-width*.5,-prop.height,width,prop.height)
+  }
   c.restore()
  }
  c.restore()
  texture.refresh()
  const world=scene.add.image(0,0,key).setOrigin(0).setDisplaySize(WIDTH,HEIGHT).setDepth(-2)
- return {world,obstacles}
+ return {world,obstacles,foreground}
 }
 export type Pose='idle'|'walk'|'run'|'attack'|'cast'|'hurt'|'dead'

@@ -14,10 +14,11 @@ import { crossing, directions, edgeAt, edgePoint, landNeighbor, nextDirection, r
 import { addItem, canCollect, collectDrop } from './inventory'
 import type { Drop } from './inventory'
 import type { Direction } from './overworld'
+import { sampleActors, sampleGround } from './art-sample'
 import { artKeys, creatureArt, heroArt, missingPortraits, motionKeys, PortraitSprites, preloadPortraits, townArt } from './portrait-sprites'
 
 type Monster={definition:typeof allMonsters[number]; x:number;y:number; home:Point; hp:number; max:number; hitAt:number; sleep:number; frozen:number; angry:boolean; hurt:number; tell?:{end:number;x:number;y:number; angle:number; phase:number}}
-type Strike='slash'|'arrow'|'spell'|'ring'
+type Strike='slash'|'arrow'|'spell'|'ring'|'frost'|'flame'
 const riftPoint={x:900,y:535}
 const elementColors=[0xff995f,0x99dfff,0xffd477,0xc785e7,0xffe0a4]
 type Burst={x:number;y:number;end:number;start:number;color:number;radius:number;source?:Point;style:Strike}
@@ -89,7 +90,7 @@ export class World extends Phaser.Scene {
    this.scene.pause()
    return
   }
-  this.assetCount=artKeys.length+2+motionKeys.length
+  this.assetCount=artKeys.length+4+motionKeys.length+sampleActors.length+sampleGround.length
   this.viewportNode=document.querySelector<HTMLElement>('#game')!
   this.viewportNode.dataset.art=String(this.assetCount)
   this.graphics=this.add.graphics()
@@ -143,10 +144,11 @@ export class World extends Phaser.Scene {
   const limit=navigator.maxTouchPoints>0?2:3
   const keep=[zone,...neighbors.filter(link=>this.mapCache.has(link.id)).map(link=>link.id)].slice(0,limit)
   for(const [id,map] of this.mapCache){
-   if(!keep.includes(id)){map.world.destroy();this.textures.remove('map-'+id);this.mapCache.delete(id);continue}
+   if(!keep.includes(id)){map.world.destroy();map.foreground.forEach(prop=>prop.sprite.destroy());this.textures.remove('map-'+id);this.mapCache.delete(id);continue}
    const link=neighbors.find(link=>link.id===id)
    const offset=link?regionOffset(link.direction):{x:0,y:0}
    map.world.setPosition(offset.x,offset.y)
+   for(const prop of map.foreground)prop.sprite.setPosition(prop.x+offset.x,prop.y+offset.y).setDepth(1+(prop.y+offset.y)/2000).setAlpha(1)
   }
   document.querySelector<HTMLElement>('#game')!.dataset.maps=String(this.mapCache.size)
  }
@@ -418,7 +420,9 @@ export class World extends Phaser.Scene {
     const a=angle(this.hero,target)
     for(let traveled=0;dist(this.hero,target)>45&&traveled<skill.range;traveled+=10)if(!this.walk(this.hero,Math.cos(a)*10,Math.sin(a)*10))break
    }
-   this.burst(skill.effect==='area'?center:valid?target:this.hero,job.color,skill.effect==='area'?100:48,valid?this.hero:undefined,skill.effect==='area'?'ring':magic?'spell':job.range>100?'arrow':'slash')
+   const frost=skill.effect==='freeze', fire=this.hero.job===2&&index===0
+   const style=frost?'frost':fire?'flame':skill.effect==='area'?'ring':magic?'spell':job.range>100?'arrow':'slash'
+   this.burst(skill.effect==='area'?center:valid?target:this.hero,frost?0x8dddf6:fire?0xff9362:job.color,skill.effect==='area'?100:48,valid?this.hero:undefined,style)
    for(const mob of victims){
     if(skill.effect==='freeze')mob.frozen=this.clock+2.1*boost
     this.hit(mob,damage,magic,skill.effect==='freeze'?1:undefined)
@@ -829,6 +833,10 @@ export class World extends Phaser.Scene {
   this.worldText.update(this.cameras.main,this.previewFrames,this.display?.ratio??1,hero)
   if(hero.preferences.effects)this.ambient()
   this.portraits.begin()
+  for(const {x,y,sprite} of this.mapCache.get(zone)?.foreground??[]){
+   const covered=hero.y<y&&hero.y>y-sprite.displayHeight*.64&&Math.abs(hero.x-x)<sprite.displayWidth*.38
+   sprite.setAlpha(covered?.62:1)
+  }
   const visible=(p:Point)=>{
    const camera=this.cameras.main, dx=p.x-(camera.scrollX+camera.width/2),dy=p.y-(camera.scrollY+camera.height/2)
    return Math.abs(dx)<camera.width/camera.zoom/2+130&&Math.abs(dy)<camera.height/camera.zoom/2+130
@@ -881,7 +889,9 @@ export class World extends Phaser.Scene {
    const name=mix?['guard','guard','wolf','wraith','guard','dragon'][this.morph!.id]:heroArt(hero.job)
    if(hero.preferences.shadows)g.fillStyle(0x120e16,.49).fillEllipse(hero.x,hero.y+1,43,13)
    this.portraits.draw('hero',name,hero.x,hero.y,91,pose,this.previewFrames,this.heading)
-   if(hero.worn[1]&&!mix)this.portraits.armor(hero.x,hero.y,this.facing,pose,this.heading)
+   const kit=hero.job===0&&!mix?this.portraits.equipment(hero.worn,pose,this.heading).join(','):''
+   if(this.viewportNode.dataset.kit!==kit)this.viewportNode.dataset.kit=kit
+   if(hero.job!==0&&hero.worn[1]&&!mix)this.portraits.armor(hero.x,hero.y,this.facing,pose,this.heading)
    if(this.viewportNode.dataset.pose!==this.portraits.heroFrame)this.viewportNode.dataset.pose=this.portraits.heroFrame
    if(this.viewportNode.dataset.facing!==String(this.heading))this.viewportNode.dataset.facing=String(this.heading)
    const weapon=hero.worn[0], armor=hero.worn[3]
@@ -921,7 +931,10 @@ export class World extends Phaser.Scene {
    this.battleEffects.lineStyle(2,effect.color,(1-t)*.78).strokeEllipse(effect.x,effect.y-7,size*1.3,size*.78)
    if(effect.style==='slash'){
     const facing=effect.source&&effect.x<effect.source.x?-1:1
-    this.battleEffects.lineStyle(4,effect.color,(1-t)*.78).beginPath().arc(effect.x-facing*11,effect.y-22,15+size*.56,facing<0?1.8:-1.35,facing<0?4.55:1.35).strokePath()
+    const arc=(width:number,radius:number,color:number,alpha:number)=>this.battleEffects.lineStyle(width,color,alpha*(1-t)).beginPath()
+     .arc(effect.x-facing*11,effect.y-22,radius,facing<0?1.8:-1.35,facing<0?4.55:1.35).strokePath()
+    const radius=15+size*.56
+    arc(7,radius,effect.color,.27);arc(2,radius,0xffe9c4,.95);arc(1.4,radius-4,effect.color,.72)
    }
    if(effect.source&&t<.63&&effect.style!=='slash'){
     if(effect.style==='arrow'){
@@ -931,7 +944,16 @@ export class World extends Phaser.Scene {
     }
     const x=Phaser.Math.Linear(effect.source.x,effect.x,t/.63),y=Phaser.Math.Linear(effect.source.y,effect.y,t/.63)-15
     this.battleEffects.lineStyle(2,effect.color,(1-t)*.8).lineBetween(effect.source.x,effect.source.y-15,x,y)
-    this.battleEffects.fillStyle(effect.color,.88).fillCircle(x,y,4)
+    this.battleEffects.fillStyle(effect.color,effect.style==='flame'?.32:.20).fillCircle(x,y,10)
+    this.battleEffects.fillStyle(effect.color,.88).fillCircle(x,y,effect.style==='flame'?5:4)
+    this.battleEffects.fillStyle(0xffefcd,.90).fillCircle(x,y,2)
+   }
+   if(effect.style==='frost'&&t>.44){
+    for(let shard=0;shard<5;shard++){
+     const theta=shard*2.399, x=effect.x+Math.cos(theta)*size*.38,y=effect.y+Math.sin(theta)*size*.20
+     this.battleEffects.fillStyle(0xb4e9f6,(1-t)*.78)
+      .fillTriangle(x-3,y,x+4,y,x-2+Math.cos(theta)*9,y-17*t)
+    }
    }
    const count=this.display?.reduced||hero.preferences.detail==='balanced'?4:9
    for(let i=0;i<count;i++){

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import {chromium,devices} from 'playwright'
 
 const base=process.env.SHADOW_TEST_URL??'http://localhost:5173/'
+const job=Number(process.env.SHADOW_SOAK_JOB??2)
 const duration=Number(process.env.SHADOW_SOAK_SECONDS??90)
 const key='shadow-dungeon.v1'
 const browser=await chromium.launch({executablePath:process.env.SHADOW_CHROMIUM})
@@ -12,7 +13,7 @@ try{
  await page.goto(base)
  await button('開始冒險').click()
  await page.getByLabel('角色名稱').fill('穩定性取樣')
- await page.locator('[data-action="job:2"]').click()
+ await page.locator(`[data-action="job:${job}"]`).click()
  await button('進入燼燈村').click()
  await button('暗影地下城首頁').click()
  await page.evaluate(key=>{

@@ -67,13 +67,21 @@ try{
  }
  for(let job=0;job<jobs.length;job++){
   if(job){await button('暗影地下城首頁').tap();await enter(job)}
-  await page.keyboard.down('d')
-  await page.waitForFunction(name=>name==='knight'?document.querySelector('#game').dataset.pose?.match(/^sample-directions:(stride|pass)-/):document.querySelector('#game').dataset.pose?.startsWith('motion-'+name+':stride'),jobs[job])
-  await page.keyboard.up('d')
+  for(const [direction,keys] of headings.entries()){
+   for(const k of keys)await page.keyboard.down(k)
+   await page.waitForFunction(([name,direction])=>{
+    const {pose,facing}=document.querySelector('#game').dataset
+    return facing===String(direction)&&(name==='knight'?
+     pose?.startsWith('sample-directions:')&&/:(stride|pass)-/.test(pose):
+     pose==='stage-'+name+':walk-'+direction)
+   },[jobs[job],direction])
+   for(const k of keys)await page.keyboard.up(k)
+  }
+  await page.keyboard.press('d',{delay:65})
   await button('普通攻擊').tap()
-  await page.waitForFunction(name=>name==='knight'?document.querySelector('#game').dataset.pose?.startsWith('sample-directions:attack-'):document.querySelector('#game').dataset.pose==='motion-'+name+':strike',jobs[job])
+  await page.waitForFunction(name=>name==='knight'?document.querySelector('#game').dataset.pose?.startsWith('sample-directions:attack-'):document.querySelector('#game').dataset.pose==='stage-'+name+':contact',jobs[job])
  }
- console.log('八方向輸入與五職業專用步行／攻擊圖格通過')
+ console.log('五職業各八方向步行與專用攻擊圖格通過')
  await button('暗影地下城首頁').tap()
  await page.evaluate(key=>{
   const hero=JSON.parse(localStorage.getItem(key))

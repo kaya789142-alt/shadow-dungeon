@@ -83,3 +83,5 @@ V2.2 的七首配樂位於 `public/score-v22/`，依序為首頁 2:28、村莊 2
 
 - `public/art-v40/knight-actions.webp` 和 JSON 為本專案原創生成的騎士施法、受擊及死亡三組連續姿態。保留來源畫素並清理透明邊。
 - `src/terrain-material.ts`、`src/world.ts` 以程式繪製地表、天候及陷阱。`src/sound.ts` 即時合成石面與軟土腳步，不依賴外部音效素材。
+
+V4.0 動作接續使用先前為本遊戲生成的八份圖稿。四職業、十名 NPC、灰脊狼人及苔冠貝希摩裁切並轉為 `public/art-motion/` WebP 和對應 JSON，沿用原專案授權。

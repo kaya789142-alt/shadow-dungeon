@@ -1,3 +1,4 @@
+import { attackFrame, locomotionFrame } from './animation'
 import Phaser from 'phaser'
 import type { Pose } from './art'
 import type { Gear } from './data'
@@ -13,6 +14,12 @@ const directory=import.meta.env.BASE_URL+'art-v22/'
 const motionDirectory=import.meta.env.BASE_URL+'art-v31/'
 const knightActions=['cast-gather','cast-release','hurt-recoil','hurt-brace','death-kneel','death-rest']
 const epicArt=import.meta.env.BASE_URL+'art-v40/'
+export const performanceAtlases=['archer','mage','assassin','paladin','village-a','village-b','wolf','warden']
+const stagedJobs=performanceAtlases.slice(0,4)
+const stagedFrames=[...Array.from({length:8},(_,i)=>locomotionFrame(i)),'ready','draw','contact','recover']
+const frameRequirements=(name:string)=>stagedJobs.includes(name)?stagedFrames:
+ name.startsWith('village')?Array.from({length:10},(_,i)=>'work-'+((name.endsWith('a')?0:5)+i%5)+'-'+Math.floor(i/5)):
+ ['stride','windup','contact','hurt','death',name==='wolf'?'pass':'cast']
 const frames=['stride-a','stride-b','strike','channel','recoil','fall']
 export const motionKeys=adventurers.map(job=>'motion-'+job)
 const path=(name:string)=>directory+name+'.webp'
@@ -47,14 +54,18 @@ export function preloadPortraits(scene:Phaser.Scene){
  scene.load.atlas(directionalTexture,sampleArt('directions'),directionalAtlas)
  scene.load.atlas('epic-knight',epicArt+'knight-actions.webp',epicArt+'knight-actions.json')
  scene.load.atlas('knight-motion',path('knight-motion'),directory+'knight-motion.json')
- scene.load.image('equipment-art',import.meta.env.BASE_URL+'art-v30/items.webp')
  for(const name of motionKeys)scene.load.atlas(name,motionDirectory+name+'.webp',motionDirectory+name+'.json')
+ for(const name of performanceAtlases){
+  const base=import.meta.env.BASE_URL+'art-motion/'+name
+  scene.load.atlas('stage-'+name,base+'.webp',base+'.json')
+ }
 }
 export function missingPortraits(scene:Phaser.Scene){
- return [...artKeys,'knight-motion','equipment-art',...motionKeys,...sampleGround,...sampleActors,'sample-equipment',directionalTexture,'epic-knight'].filter(name=>{
+ return [...artKeys,'knight-motion',...motionKeys,...sampleGround,...sampleActors,'sample-equipment',directionalTexture,'epic-knight',...performanceAtlases.map(name=>'stage-'+name)].filter(name=>{
   if(name==='sample-equipment'&&(!scene.textures.exists(name)||Array.from({length:10},(_,slot)=>String(slot)).some(slot=>!scene.textures.get(name).has(slot))))return true
   if(name===directionalTexture&&(!scene.textures.exists(name)||['stride','pass','attack','idle'].some(pose=>Array.from({length:8},(_,i)=>i).some(i=>!scene.textures.get(name).has(pose+'-'+i)))))return true
   if(name==='epic-knight'&&(!scene.textures.exists(name)||knightActions.some(frame=>!scene.textures.get(name).has(frame))))return true
+  if(name.startsWith('stage-')&&(!scene.textures.exists(name)||frameRequirements(name.slice(6)).some(frame=>!scene.textures.get(name).has(frame))))return true
   const source=scene.textures.exists(name)?scene.textures.get(name).getSourceImage():undefined
   return !(source instanceof HTMLImageElement)||source.naturalWidth<(name==='sample-knight-idle'?150:256)||source.naturalHeight<256||motionKeys.includes(name)&&frames.some(frame=>!scene.textures.get(name).has(frame))
  })
@@ -65,19 +76,21 @@ export class PortraitSprites {
  private feet:Phaser.GameObjects.Image[]=[]
  heroFrame=''
  private poses=new Map<object|string,{pose:Pose;since:number}>()
- constructor(private scene:Phaser.Scene){
-  const equipment=scene.textures.get('equipment-art')
-  if(!equipment.has('shield'))equipment.add('shield',0,192,0,192,192)
- }
- armor(x:number,y:number,facing:number,pose:Pose,heading:number){
-  if(pose==='dead')return
+ constructor(private scene:Phaser.Scene){}
+ armor(pose:Pose,heading:number){
+  const body=this.images.get('hero')
+  if(pose==='dead'||!body)return
   const key='hero-shield'
   let shield=this.images.get(key)
-  if(!shield){shield=this.scene.add.image(x,y,'equipment-art','shield');this.images.set(key,shield)}
+  if(!shield){shield=this.scene.add.image(body.x,body.y,'sample-equipment','1');this.images.set(key,shield)}
   this.drawn.add(key)
-  const upper=heading>=5&&heading<=7
-  shield.setVisible(true).setPosition(x-facing*17,y-44+(pose==='attack'?-3:0))
-   .setDepth(1+y/2000+(upper?-.0002:.0002)).setDisplaySize(28,28).setFlipX(facing<0)
+  const rear=heading>=5
+  const offset=body.flipX||heading===3||heading===4||heading===5?1:-1
+  const dy=-body.displayHeight*.49, dx=offset*body.displayWidth*.27
+  const a=body.rotation
+  const size=body.displayHeight*.34
+  shield.setVisible(true).setPosition(body.x+dx*Math.cos(a)-dy*Math.sin(a),body.y+dy*Math.cos(a)+dx*Math.sin(a))
+   .setDepth(body.depth+(rear?-.0002:.0002)).setDisplaySize(size,size).setFlipX(offset>0).setRotation(a)
  }
  equipment(worn:Record<number,Gear>,pose:Pose,direction:number){
   const body=this.images.get('hero')
@@ -107,25 +120,43 @@ export class PortraitSprites {
  begin(){this.drawn.clear();for(const foot of this.feet)foot.setVisible(false)}
  end(){for(const [key,image] of this.images)if(!this.drawn.has(key))image.setVisible(false)}
  reset(){for(const image of [...this.images.values(),...this.feet])image.destroy();this.images.clear();this.poses.clear();this.feet=[]}
- draw(key:object|string,name:string,x:number,y:number,height:number,pose:Pose,time:number,direction:number){
+ draw(key:object|string,name:string,x:number,y:number,height:number,pose:Pose,time:number,direction:number,poseElapsed?:number,override?:{atlas:string;frame:string},impact=false){
   let state=this.poses.get(key)
   if(!state||state.pose!==pose){state={pose,since:time};this.poses.set(key,state)}
-  const elapsed=Math.max(0,time-state.since)
+  const elapsed=Math.max(0,poseElapsed??time-state.since)
   const stroke=Math.sin(Math.min(1,elapsed/.29)*Math.PI)
   const recoil=Math.max(.12,1-elapsed*4.4)
   const fall=Math.min(1,elapsed*6)
   const walking=pose==='run'||pose==='walk'
   const rear=direction>=5&&direction<=7&&adventurers.includes(name)
-  const frame=adventurers.includes(name)&&!rear?(walking?Math.floor(time*(pose==='run'?11:7))%2?'stride-a':'stride-b':
+  const front=adventurers.includes(name)&&(!rear||stagedJobs.includes(name)&&['cast','hurt','dead'].includes(pose))
+  const frame=front?(walking?Math.floor(time*(pose==='run'?11:7))%2?'stride-a':'stride-b':
    pose==='attack'&&elapsed>.045?'strike':pose==='cast'?'channel':pose==='hurt'?'recoil':pose==='dead'?'fall':'__BASE'):'__BASE'
   const response=name==='knight'&&!rear&&(pose==='cast'||pose==='dead'||pose==='hurt')
   const directional=name==='knight'&&!response&&pose!=='cast'&&pose!=='dead'
-  const texture=response?'epic-knight':directional?directionalTexture:frame!=='__BASE'?'motion-'+name:rear?name+'-back':name
-  const beat=walking?(Math.floor(time*(pose==='run'?11:7))%2?'stride':'pass'):pose==='attack'&&elapsed>.045?'attack':'idle'
+  const action=attackFrame(elapsed)
+  const stridePhase=Math.floor(time*(pose==='run'?11:7))%2
+  let stage=override
+  let nativeFacing=directional
+  if(stagedJobs.includes(name)){
+   if(walking&&(direction!==1&&direction!==3||stridePhase===0)){
+    stage={atlas:name,frame:locomotionFrame(direction)}
+    nativeFacing=true
+   }
+   if(pose==='attack'||name==='mage'&&pose==='cast')stage={atlas:name,frame:attackFrame(pose==='cast'?elapsed+.04:elapsed)}
+  }
+  if(name==='sample-wolf'||name==='sample-warden'){
+   const atlas=name.slice('sample-'.length)
+   const effect=pose==='dead'?'death':pose==='hurt'?'hurt':pose==='attack'?impact?'contact':'windup':
+    pose==='cast'&&atlas==='warden'?impact?'contact':'cast':walking?atlas==='wolf'&&stridePhase===0?'pass':'stride':undefined
+   if(effect)stage={atlas,frame:effect}
+  }
+  const texture=stage?'stage-'+stage.atlas:response?'epic-knight':directional?directionalTexture:frame!=='__BASE'?'motion-'+name:rear?name+'-back':name
+  const beat=walking?(stridePhase?'stride':'pass'):pose==='attack'&&action==='contact'?'attack':'idle'
   const responseFrame=pose==='cast'?elapsed<.10?'cast-gather':'cast-release':
    pose==='hurt'?elapsed<.11?'hurt-recoil':'hurt-brace':elapsed<.18?'death-kneel':'death-rest'
-  const spriteFrame=response?responseFrame:directional?beat+'-'+direction:frame
-  const authored=response||(directional?pose!=='hurt':frame!=='__BASE')
+  const spriteFrame=stage?.frame??(response?responseFrame:directional?beat+'-'+direction:frame)
+  const authored=!!stage||response||(directional?pose!=='hurt':frame!=='__BASE')
   if(key==='hero')this.heroFrame=texture+':'+spriteFrame
   let image=this.images.get(key)
   if(!image){
@@ -135,7 +166,7 @@ export class PortraitSprites {
   this.drawn.add(key)
   const source=image.frame
   const sourceWidth=source.realWidth,sourceHeight=source.realHeight
-  const renderedHeight=response&&pose==='dead'?(spriteFrame==='death-kneel'?58:33):frame==='fall'?35:height
+  const renderedHeight=stage?.frame==='death'?height*.51:response&&pose==='dead'?(spriteFrame==='death-kneel'?58:33):frame==='fall'?35:height
   const width=renderedHeight*sourceWidth/sourceHeight
   const heading=Math.cos(direction*Math.PI/4)
   const facing=heading<-.2?-1:1
@@ -147,13 +178,13 @@ export class PortraitSprites {
   const rise=pose==='cast'?-stroke*7:moving?-Math.abs(step)*2.2:swell
   const lunge=pose==='attack'?facing*stroke*12:pose==='hurt'?-facing*recoil*6:step*1.2
   const angle=pose==='dead'?-facing*fall*77:pose==='attack'?facing*stroke*15:pose==='hurt'?-facing*recoil*12:step*2.1
-  const narrow=direction===2||direction===6?.86:direction===0||direction===4?.94:1
+  const narrow=stage?1:direction===2||direction===6?.86:direction===0||direction===4?.94:1
   const walk=!authored&&key==='hero'&&moving&&adventurers.includes(name)
   const cut=Math.round(sourceHeight*.80)
   const split=Math.round(sourceWidth*.51)
   const depth=1+y/2000
-  image.setFrame(spriteFrame).setVisible(true).setDepth(depth).setFlipX(!directional&&facing<0).setAngle(authored?0:angle)
-   .setPosition(x+lunge,y+rise).setDisplaySize(width*narrow,renderedHeight*stretch+Math.abs(step)*.9)
+  image.setFrame(spriteFrame).setVisible(true).setDepth(depth).setFlipX(!nativeFacing&&facing<0).setAngle(authored?0:angle)
+   .setPosition(x+(stage?0:lunge),y+(stage?0:rise)).setDisplaySize(width*narrow,renderedHeight*(stage?1:stretch)+(stage?0:Math.abs(step)*.9))
    .setAlpha(pose==='dead'?.72:1)
   if(walk){
    const atlas=image.texture

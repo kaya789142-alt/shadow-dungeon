@@ -223,3 +223,13 @@ test('epic lighting, shield blocks and set thresholds remain deterministic',asyn
  assert.deepEqual(setBonus(worn),{pieces:5,defense:4,damage:5})
  assert.equal(setBonus({...worn,1:makeGear(1,1,5)}).damage,0)
 })
+
+test('animation contact drives projectile and melee timelines',async()=>{
+ const {attackFrame,meleeContact,attackDuration,flightToContact}=await import('../src/animation.ts')
+ assert.equal(attackFrame(0),'ready')
+ assert.equal(attackFrame(meleeContact-.001),'draw')
+ assert.equal(attackFrame(meleeContact),'contact')
+ assert.equal(attackFrame(.225),'recover')
+ assert.ok(attackDuration(false)>.22)
+ assert.ok(attackDuration(true)>meleeContact+flightToContact)
+})

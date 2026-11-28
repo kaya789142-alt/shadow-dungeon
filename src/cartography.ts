@@ -2,7 +2,7 @@ import { zones } from './data'
 import { regionGrid, regionNeighbor } from './overworld'
 
 const landmarks=[
- 'town','forest','field','grave','cave','mountain','cave','town','town','grave','mountain','cave','cave'
+ 'town','forest','field','grave','cave','mountain','cave','town','town','grave','mountain','cave','cave','grave','cave','town'
 ]
 const glyphs:Record<string,string>={
  town:'<path d="M-13 8V-5h5v-7h5v7h6v-7h5v7h5v13H3v-5h-6v5Z"/>',

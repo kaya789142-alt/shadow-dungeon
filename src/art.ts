@@ -2,7 +2,7 @@ import Phaser from 'phaser'
 import { landNeighbor, onRoad, onVerticalRoad, regionNeighbor, roadX, roadY, regionWidth, regionHeight } from './overworld'
 import { safeZone, zones } from './data'
 
-import { cobble, roofMaterial } from './terrain-material'
+import { cobble, groundPatches, roofMaterial } from './terrain-material'
 
 export const WIDTH=regionWidth, HEIGHT=regionHeight, TILE=32
 export type Obstacle={x:number;y:number;r:number}
@@ -168,7 +168,7 @@ export function drawWorld(scene:Phaser.Scene,zone:number){
     for(let i=0;i<40;i++)r()
    }else pine(g,x,y,s,shade,r)
   }
-  else if(zone===3&&has('tomb'))propsArt.push({name:'tomb',x,y,height:43*s,width:39*s,mirror:x%2>1})
+  else if((zone===3||zone===13||zone===14)&&has('tomb'))propsArt.push({name:'tomb',x,y,height:43*s,width:39*s,mirror:x%2>1})
   else if(zone===3){
    oval(g,0x171a24,x,y+1,38*s,13*s,.5)
    ink(g,0x38394a,x-10*s,y-26*s,20*s,30*s);ink(g,0x626276,x-8*s,y-29*s,15*s,25*s)
@@ -330,11 +330,12 @@ export function drawWorld(scene:Phaser.Scene,zone:number){
  if(settlement){
   for(let y=458;y<599;y+=8)for(let x=475+(Math.floor(y/8)%2)*11;x<1120;x+=23){
    if(Math.hypot(x-774,y-501)<56||[[475,487],[638,480],[912,480],[1120,487],[508,583],[1063,560]].some(([tx,ty])=>Math.hypot(x-tx,y-ty)<17))continue
-   cobble(c,x+detail()*2-1,y+detail()*1.4-1,21+detail()*2,7.5,.76,detail)
+   cobble(c,x+(detail()-.5)*6,y+(detail()-.5)*3,17+detail()*8,6+detail()*4,.78,detail)
   }
   if(!has(cottages[0]))for(const [x,y] of [[568,424],[752,401],[944,420],[1054,648],[519,650]])roofMaterial(c,x,y,detail)
  }
  c.globalAlpha=1
+ if(zone===0||zone===1)groundPatches(c,zone,(x,y)=>!path(x,y)&&!plaza(x,y),detail)
  c.imageSmoothingEnabled=true;c.imageSmoothingQuality='high'
  const foreground:{x:number;y:number;sprite:Phaser.GameObjects.Image}[]=[]
  for(const prop of propsArt.sort((a,b)=>a.y-b.y)){

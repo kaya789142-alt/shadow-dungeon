@@ -78,3 +78,10 @@ V2.2 的七首配樂位於 `public/score-v22/`，依序為首頁 2:28、村莊 2
 作曲、配器、音符及音量包絡見 `scripts/render-score.py`。音樂使用 FluidSynth 渲染，以 FFmpeg 編碼成 AAC。音色樣本來自 Tim Brechbill 與 David Bolton 的 TimGM6mb SoundFont（GPL-2.0）。錄音與重製程式依 GPL-2.0 發布。第三方音色庫的原始檔及來源資訊可從 [Debian timgm6mb-soundfont 原始碼套件](https://packages.debian.org/source/stable/timgm6mb-soundfont) 取得。原始 SoundFont 只用於製作配樂。完整授權與歸屬分別見 `public/licenses/score-gpl-v2.txt`、`public/licenses/timgm6mb.txt`。V2.1 的戰鬥操作和環境聲由當時的 Web Audio 音效程式產生；V2.2 改用新的採樣音效。
 
 在安裝 Python 3、FluidSynth、TimGM6mb SoundFont 和 FFmpeg 的環境，可執行 `python scripts/render-score.py /path/to/TimGM6mb.sf2` 重製 V2.2 的八個配樂檔案和十一個音效檔案。
+
+## V4.0 暗黑史詩版
+
+- `public/art-v40/knight-actions.webp` 和 JSON 為本專案原創生成的騎士施法、受擊及死亡三組連續姿態。保留來源畫素並清理透明邊。
+- `src/terrain-material.ts`、`src/world.ts` 以程式繪製地表、天候及陷阱。`src/sound.ts` 即時合成石面與軟土腳步，不依賴外部音效素材。
+
+V4.0 動作接續使用先前為本遊戲生成的八份圖稿。四職業、十名 NPC、灰脊狼人及苔冠貝希摩裁切並轉為 `public/art-motion/` WebP 和對應 JSON，沿用原專案授權。

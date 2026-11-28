@@ -1,11 +1,13 @@
+import { attackDuration, castRelease, flightToContact, meleeContact } from './animation'
+import { daylight, guardedDamage, trapState } from './epic'
 import Phaser from 'phaser'
 import { chest, drawWorld, entry, exit, HEIGHT, npcPoints, refuge, rng, secret, WIDTH } from './art'
 import type { Obstacle, Pose } from './art'
-import { allMonsters, elements, jobElements, jobs, morphs, pets, qualityColors, quests, rules, safeZone, vendors, zoneRoutes, zones } from './data'
+import { allMonsters, elements, jobElements, jobs, morphs, pets, qualityColors, quests, relicForZone, rules, safeZone, vendors, zoneRoutes, zones } from './data'
 import type { Gear, Material } from './data'
 import { attributes, giveXp, makeGear, makeRelic, qualityRoll, record, rollover, spawn } from './model'
 import type { Hero } from './model'
-import { sound, soundtrack, victory } from './sound'
+import { footstep, sound, soundtrack, victory } from './sound'
 import { clearPath, distance as dist, makeRoute } from './navigation'
 import type { Point } from './navigation'
 import { WorldText } from './world-text'
@@ -15,10 +17,12 @@ import { addItem, canCollect, collectDrop } from './inventory'
 import type { Drop } from './inventory'
 import type { Direction } from './overworld'
 import { sampleActors, sampleGround } from './art-sample'
-import { artKeys, creatureArt, heroArt, missingPortraits, motionKeys, PortraitSprites, preloadPortraits, townArt } from './portrait-sprites'
+import { artKeys, creatureArt, heroArt, missingPortraits, motionKeys, performanceAtlases, PortraitSprites, preloadPortraits, townArt } from './portrait-sprites'
 
-type Monster={definition:typeof allMonsters[number]; x:number;y:number; home:Point; hp:number; max:number; hitAt:number; sleep:number; frozen:number; angry:boolean; hurt:number; tell?:{end:number;x:number;y:number; angle:number; phase:number}}
+type Monster={definition:typeof allMonsters[number]; x:number;y:number; home:Point; hp:number; max:number; hitAt:number; sleep:number; frozen:number; angry:boolean; hurt:number; impact?:number; windup?:number; tell?:{end:number;x:number;y:number; angle:number; phase:number}}
+const defenseReach=(def:Monster['definition'])=>def.ranged?139:def.boss?76:38
 type Strike='slash'|'arrow'|'spell'|'ring'|'frost'|'flame'
+const traps=[{x:545,y:531},{x:963,y:554}]
 const riftPoint={x:900,y:535}
 const elementColors=[0xff995f,0x99dfff,0xffd477,0xc785e7,0xffe0a4]
 type Burst={x:number;y:number;end:number;start:number;color:number;radius:number;source?:Point;style:Strike}
@@ -53,6 +57,14 @@ export class World extends Phaser.Scene {
  private display?:DisplayResolution
  private portraits!:PortraitSprites
  private heading=1
+ private weatherInk!:Phaser.GameObjects.Graphics
+ private nextStep=0
+ private skippedTargets=new WeakMap<Monster,number>()
+ private failedChase=0
+ private trapClaims=[-1,-1]
+ private poseStarted=0
+ private actionEvent:{at:number;run:()=>void}|undefined
+ private npcActivity=new Map<number,number>()
  private graphics!:Phaser.GameObjects.Graphics
  private battleEffects!:Phaser.GameObjects.Graphics
  private worldText!:WorldText
@@ -90,11 +102,12 @@ export class World extends Phaser.Scene {
    this.scene.pause()
    return
   }
-  this.assetCount=artKeys.length+4+motionKeys.length+sampleActors.length+sampleGround.length
+  this.assetCount=artKeys.length+4+motionKeys.length+sampleActors.length+sampleGround.length+performanceAtlases.length
   this.viewportNode=document.querySelector<HTMLElement>('#game')!
   this.viewportNode.dataset.art=String(this.assetCount)
   this.graphics=this.add.graphics()
   this.battleEffects=this.add.graphics().setDepth(3)
+  this.weatherInk=this.add.graphics().setDepth(2)
   this.portraits=new PortraitSprites(this)
   this.worldText=new WorldText(document.querySelector<HTMLElement>('#world-text')!)
   this.cameras.main.setBounds(0,0,WIDTH,HEIGHT).setRoundPixels(true)
@@ -181,6 +194,10 @@ export class World extends Phaser.Scene {
   this.hero.zone=zone
   this.portraits.reset()
   this.lastCombat=-10
+  this.actionEvent=undefined
+  this.npcActivity.clear()
+  this.nextStep=this.clock
+  this.trapClaims=[-1,-1]
   this.obstacles=this.ensureMap(zone).obstacles
   const point=position??(safeZone(zone)?spawn:entry)
   this.hero.x=point.x;this.hero.y=point.y
@@ -310,7 +327,7 @@ export class World extends Phaser.Scene {
   const zone=this.hero.zone
   if(safeZone(zone)){
    const i=npcPoints.findIndex(q=>near(q,27))
-   if(i>=0){this.approach(npcPoints[i],()=>this.callbacks.npc(i));return}
+   if(i>=0){this.approach(npcPoints[i],()=>{this.npcActivity.set(i,this.previewFrames);this.callbacks.npc(i)});return}
    if(near({x:774,y:510},34)){this.approach({x:774,y:510},()=>this.restore());return}
   }
   const [back,next]=zoneRoutes(zone)
@@ -366,16 +383,23 @@ export class World extends Phaser.Scene {
   this.enter(0,spawn,true);this.restore();this.callbacks.refresh()
  }
  lock(mob:Monster){
+  this.failedChase=0
   this.target=mob;this.destination=undefined;this.interaction=undefined;this.interactionPoint=undefined
  }
- private nearest(range:number){
-  return this.mobs.filter(m=>m.hp>0&&dist(this.hero,m)<range).sort((a,b)=>dist(this.hero,a)-dist(this.hero,b))[0]
+ private nearest(range:number,ignoreSkipped=false){
+  let closest:Monster|undefined
+  for(const mob of this.mobs){
+   if(mob.hp<=0||ignoreSkipped&&(this.skippedTargets.get(mob)??0)>this.clock)continue
+   const distance=dist(this.hero,mob)
+   if(distance<range){range=distance;closest=mob}
+  }
+  return closest
  }
  attack(){
-  if(!this.activePlay||this.blocked||this.dead)return
+  if(!this.activePlay||this.blocked||this.dead||this.actionEvent)return
   const target=this.target??this.nearest(340)
   if(target){this.lock(target);this.basic(target)}
-  else if(this.clock-this.lastAttack>.3){this.lastAttack=this.clock;this.setPose('attack');this.burst(this.hero,0xd5a86c,30);sound('hit')}
+  else if(this.clock-this.lastAttack>.3){this.lastAttack=this.clock;this.setPose('attack');this.scheduleAction(meleeContact,()=>{this.burst(this.hero,0xd5a86c,30);sound('hit')})}
  }
  private line(a:Point,b:Point){
   const length=dist(a,b)
@@ -386,17 +410,36 @@ export class World extends Phaser.Scene {
   return true
  }
  private basic(mob:Monster){
+  if(this.actionEvent)return
   const stats=attributes(this.hero), job=jobs[this.hero.job]
-  if(dist(this.hero,mob)>job.range||!this.line(this.hero,mob)||this.clock-this.lastAttack<stats.interval/(this.morph?morphs[this.morph.id][3]:1))return
-  this.lastAttack=this.clock;this.facing=mob.x<this.hero.x?-1:1;this.heading=this.direction(mob.x-this.hero.x,mob.y-this.hero.y);this.setPose('attack')
+  if(mob.hp<=0||dist(this.hero,mob)>job.range||!this.line(this.hero,mob)||this.clock-this.lastAttack<stats.interval/(this.morph?morphs[this.morph.id][3]:1))return
+  this.lastAttack=this.clock
+  this.facing=mob.x<this.hero.x?-1:1
+  this.heading=this.direction(mob.x-this.hero.x,mob.y-this.hero.y)
   const style=this.hero.job===1?'arrow':this.hero.job===2?'spell':'slash'
-  this.burst(mob,job.color,50,this.hero,style)
-  sound(style==='arrow'?'arrow':style==='spell'?'magic':'hit')
-  this.hit(mob,this.hero.job===2?stats.magic:stats.attack,this.hero.job===2)
+  const projectile=style!=='slash'
+  const magic=this.hero.job===2,power=magic?stats.magic:stats.attack
+  this.setPose('attack',attackDuration(projectile))
+  this.scheduleAction(meleeContact,()=>{
+   if(mob.hp<=0||dist(this.hero,mob)>job.range+8||!this.line(this.hero,mob))return
+   this.burst(mob,job.color,50,this.hero,style)
+   sound(style==='arrow'?'arrow':style==='spell'?'magic':'hit')
+   if(projectile)this.scheduleAction(flightToContact,()=>this.hit(mob,power,magic))
+   else this.hit(mob,power,magic)
+  })
+ }
+ private scheduleAction(delay:number,run:()=>void){
+  this.actionEvent={at:this.clock+delay,run}
+ }
+ private processAction(){
+  const ready=this.actionEvent
+  if(!ready||this.clock<ready.at)return
+  this.actionEvent=undefined
+  ready.run()
  }
  cast(index:number){
   const job=jobs[this.hero.job], skill=job.skills[index], rank=this.hero.skills[index]
-  if(!skill||!this.activePlay||this.blocked||this.dead)return
+  if(!skill||!this.activePlay||this.blocked||this.dead||this.actionEvent)return
   if(!rank){this.callbacks.message('請先向技能導師學習 '+skill.name,'warn');return}
   if(this.cooldowns[index]>this.clock)return
   if(this.hero.mp<skill.mana){this.callbacks.message('魔力不足','warn');return}
@@ -405,7 +448,15 @@ export class World extends Phaser.Scene {
   const valid=target&&dist(this.hero,target)<=skill.range&&this.line(this.hero,target)
   if(offensive&&skill.effect!=='area'&&!valid){this.callbacks.message('目標不在技能範圍內','warn');return}
   this.hero.mp-=skill.mana;this.cooldowns[index]=this.clock+skill.cooldown
-  this.setPose('cast');record(this.hero,'cast');sound('magic')
+  if(valid&&target){this.heading=this.direction(target.x-this.hero.x,target.y-this.hero.y);this.facing=target.x<this.hero.x?-1:1}
+  this.setPose('cast',.45)
+  this.scheduleAction(castRelease,()=>this.resolveCast(index,rank,target))
+ }
+ private resolveCast(index:number,rank:number,target:Monster|undefined){
+  const job=jobs[this.hero.job],skill=job.skills[index]
+  const valid=target&&target.hp>0&&dist(this.hero,target)<=skill.range&&this.line(this.hero,target)
+  record(this.hero,'cast');sound('magic')
+  const zone=this.hero.zone
   const stats=attributes(this.hero), boost=1+(rank-1)*.18
   if(skill.effect==='heal'){this.hero.hp=Math.min(stats.hp,this.hero.hp+stats.hp*skill.power*boost);this.burst(this.hero,0x94f0b9,65)}
   else if(skill.effect==='shield'){this.shield=skill.power;this.shieldUntil=this.clock+5*boost;this.burst(this.hero,0xffd27c,69)}
@@ -420,13 +471,18 @@ export class World extends Phaser.Scene {
     const a=angle(this.hero,target)
     for(let traveled=0;dist(this.hero,target)>45&&traveled<skill.range;traveled+=10)if(!this.walk(this.hero,Math.cos(a)*10,Math.sin(a)*10))break
    }
+   if(this.hero.zone!==zone)return
    const frost=skill.effect==='freeze', fire=this.hero.job===2&&index===0
    const style=frost?'frost':fire?'flame':skill.effect==='area'?'ring':magic?'spell':job.range>100?'arrow':'slash'
    this.burst(skill.effect==='area'?center:valid?target:this.hero,frost?0x8dddf6:fire?0xff9362:job.color,skill.effect==='area'?100:48,valid?this.hero:undefined,style)
-   for(const mob of victims){
-    if(skill.effect==='freeze')mob.frozen=this.clock+2.1*boost
-    this.hit(mob,damage,magic,skill.effect==='freeze'?1:undefined)
+   const impact=()=>{
+    for(const mob of victims){
+     if(skill.effect==='freeze')mob.frozen=this.clock+2.1*boost
+     this.hit(mob,damage,magic,skill.effect==='freeze'?1:undefined)
+    }
    }
+   if(valid&&['arrow','spell','flame','frost'].includes(style))this.scheduleAction(flightToContact,()=>{impact();this.callbacks.refresh()})
+   else impact()
   }
   this.callbacks.refresh()
  }
@@ -473,9 +529,9 @@ export class World extends Phaser.Scene {
   const roll=Math.random()
   const [shard,red,armor,weapon]=rules.materialCuts
   const material:Material=def.boss?'bless':roll<rules.book?'book':roll<shard?'shard':roll<red?'red':roll<armor?'armor':roll<weapon?'weapon':'blue'
-  const grade=qualityRoll(Math.random(),def.rank==='世界魔王'?4:def.boss?2:def.rank==='精英'?1:0)
+  const grade=qualityRoll(Math.random(),def.rank==='世界魔王'||def.zone===15&&def.boss?4:def.boss?2:def.rank==='精英'?1:0)
   const slot=Math.floor(Math.random()*9)
-  const gear=def.zone>=9&&(def.boss||grade>=3)?makeRelic(slot,grade,def.level,hero.job,def.zone-8):
+  const gear=def.zone>=9&&(def.boss||grade>=3)?makeRelic(slot,grade,def.level,hero.job,relicForZone(def.zone)):
    def.boss||Math.random()<rules.drop?makeGear(slot,grade,def.level,slot===0?hero.job:undefined):undefined
   this.loot.push({x:mob.x,y:mob.y,gold:(11+def.level*4)*(def.boss?8:1),material,gear})
   if(gear&&grade>=3){sound('loot');this.callbacks.message('高品質裝備已掉落！','gold');this.burst(mob,colorNumber(qualityColors[grade]),91)}
@@ -521,7 +577,7 @@ export class World extends Phaser.Scene {
   const zone=this.hero.zone
   if(this.hero.chests.includes(zone)){this.callbacks.message('這個寶箱已經打開');return}
   this.hero.chests.push(zone);record(this.hero,'chest')
-  this.loot.push({...chest,gold:75*zone,material:'protect',gear:zone>=9?makeRelic((zone+2)%8+1,3,zones[zone][1],this.hero.job,zone-8):makeGear((zone+2)%9,2,zones[zone][1])})
+  this.loot.push({...chest,gold:75*zone,material:'protect',gear:zone>=9?makeRelic((zone+2)%8+1,3,zones[zone][1],this.hero.job,relicForZone(zone)):makeGear((zone+2)%9,2,zones[zone][1])})
   this.collect(this.loot[this.loot.length-1])
   this.callbacks.message('發現失落寶箱','gold')
  }
@@ -558,7 +614,7 @@ export class World extends Phaser.Scene {
  private float(p:Point,text:string,color:string,critical=false){
   if(this.hero.preferences.damageText)this.worldText.damage(p,text,color,critical,this.previewFrames)
  }
- private setPose(pose:Pose){this.pose=pose;this.poseUntil=this.clock+.29}
+ private setPose(pose:Pose,duration=.29){this.pose=pose;this.poseStarted=this.clock;this.poseUntil=this.clock+duration}
  private hurt(mob:Monster,multiplier=1){
   if(this.dead||this.hiddenUntil>this.clock)return
   this.lastCombat=this.clock
@@ -566,11 +622,12 @@ export class World extends Phaser.Scene {
   if(Math.random()<stats.evade){this.float(this.hero,'閃避','#c7dade');return}
   const level=mob.definition.level
   const shield=this.shieldUntil>this.clock?this.shield:0
-  const damage=Math.max(1,Math.round(((8+level*3.1)*multiplier-stats.defense)* (1-shield)*(this.pet?.id===2?.82:1)))
+  const {blocked,damage}=guardedDamage(((8+level*3.1)*multiplier-stats.defense)*(1-shield)*(this.pet?.id===2?.82:1),this.hero.worn[1],Math.random())
+  if(blocked){this.burst(this.hero,0xffdf93,37);sound('forge')}
   this.hero.hp=Math.max(0,this.hero.hp-damage)
-  this.float(this.hero,String(damage),'#ff9d94');this.setPose('hurt')
+  this.float(this.hero,blocked?'格擋 '+damage:String(damage),blocked?'#ffe5a6':'#ff9d94');if(!this.actionEvent)this.setPose('hurt')
   if(this.hero.hp===0){
-   this.dead=true;this.auto=false;this.hero.gold=Math.floor(this.hero.gold*.94);sound('death');this.callbacks.death()
+   this.dead=true;this.actionEvent=undefined;this.setPose('dead');this.auto=false;this.hero.gold=Math.floor(this.hero.gold*.94);sound('death');this.callbacks.death()
   }
  }
  private hazard(mob:Monster, p:Point){
@@ -583,23 +640,36 @@ export class World extends Phaser.Scene {
    case 1:return along>=0&&along<length+45&&Math.abs(across)<32+t.phase*7
    case 2:return Math.hypot(dx,dy)<length&&Math.hypot(dx,dy)>43
    case 3:return Math.hypot(dx,dy)<length&&(Math.abs(dx)<37||Math.abs(dy)<37)
+   case 6:return along>=0&&along<length+70&&Math.abs(across)<25+along*.28
    case 5:return Math.hypot(dx,dy)<length+36&&(Math.abs(dx)<25+t.phase*11||Math.abs(dy)<25+t.phase*11||Math.hypot(dx,dy)>105)
    default:return Math.hypot(dx,dy)<length&&Math.abs(Math.atan2(across,along))<.68+t.phase*.18
   }
  }
  private think(mob:Monster,dt:number){
   if(mob.hp<=0){
-   if(this.clock>=mob.sleep){Object.assign(mob,mob.home);mob.hp=mob.max;mob.angry=false;mob.hitAt=this.clock+1}
+   if(this.clock>=mob.sleep){Object.assign(mob,mob.home);mob.hp=mob.max;mob.angry=false;mob.windup=undefined;mob.hitAt=this.clock+1}
    return
   }
   if(mob.tell){
    if(this.clock>=mob.tell.end){
+    mob.impact=this.clock+.19
     if(this.hazard(mob,this.hero))this.hurt(mob,2.3+mob.tell.phase*.55)
     this.burst(mob,0xff7668,130);mob.tell=undefined;sound('hit')
    }
    return
   }
-  if(mob.frozen>this.clock)return
+  if(mob.frozen>this.clock){mob.windup=undefined;return}
+  if(mob.windup!==undefined){
+   if(this.clock<mob.windup)return
+   mob.windup=undefined
+   mob.impact=this.clock+.19
+   const reach=defenseReach(mob.definition)
+   if(dist(mob,this.hero)<=reach+12&&this.line(mob,this.hero)){
+    this.hurt(mob,mob.definition.rank==='精英'?1.4:mob.definition.rank==='稀有'?1.2:1)
+    this.burst(this.hero,mob.definition.color,21,mob.definition.ranged?mob:undefined)
+   }
+   return
+  }
   const d=dist(mob,this.hero), home=dist(mob,mob.home), def=mob.definition
   if(d<(def.boss?249:136)&&this.hiddenUntil<=this.clock)mob.angry=true
   if(home>420||d>465||this.hiddenUntil>this.clock)mob.angry=false
@@ -615,14 +685,13 @@ export class World extends Phaser.Scene {
    if(phase===2&&Math.random()<.44)this.callbacks.message(def.name+' 正在聚集暗影','warn')
    return
   }
-  const range=def.ranged?139:def.boss?76:38
+  const range=defenseReach(def)
   if(d>range||!this.line(mob,this.hero)){
    const a=angle(mob,this.hero), speed=(def.boss?79:76)+phase*9+this.hero.zone*1.7
    for(const offset of [0,.8,-.8,1.55,-1.55])if(this.walk(mob,Math.cos(a+offset)*speed*dt,Math.sin(a+offset)*speed*dt))break
   }else if(this.clock>mob.hitAt){
-   mob.hitAt=this.clock+1.2
-   this.hurt(mob,def.rank==='精英'?1.4:def.rank==='稀有'?1.2:1)
-   this.burst(this.hero,def.color,21,def.ranged?mob:undefined)
+   mob.windup=this.clock+(def.ranged?.34:.23)
+   mob.hitAt=mob.windup+1.05
   }
  }
  private explore(){
@@ -645,6 +714,7 @@ export class World extends Phaser.Scene {
   this.display?.sample(delta,this.activePlay&&!this.blocked)
   if(this.activePlay&&!this.blocked&&!this.dead){
    this.clock+=dt
+   this.processAction()
    const hero=this.hero, stats=attributes(hero)
    if(this.morph&&this.morph.end<=this.clock)this.morph=undefined
    if(this.pet&&this.pet.end<=this.clock)this.pet=undefined
@@ -659,26 +729,42 @@ export class World extends Phaser.Scene {
     this.destination=undefined;this.interaction=undefined;this.interactionPoint=undefined;this.target=undefined
     this.running=!!k?.SHIFT.isDown||Math.hypot(this.joystick.x,this.joystick.y)>.9
     const stride=speed*(this.running?1.21:1)
-    this.moving=this.walk(hero,dx/norm*stride*dt,dy/norm*stride*dt)
-    this.heading=this.direction(dx,dy)
-    if(dx)this.facing=dx>0?1:-1
+    this.moving=!this.actionEvent&&this.walk(hero,dx/norm*stride*dt,dy/norm*stride*dt)
+    if(!this.actionEvent){this.heading=this.direction(dx,dy);if(dx)this.facing=dx>0?1:-1}
    }else if(!this.interactNear()){
     if(this.auto&&!this.target&&!this.destination){
      const drop=this.hero.pickup.enabled?this.loot.find(item=>dist(hero,item)<this.hero.pickup.range+185&&canCollect(hero,item,true)):undefined
      if(drop)this.approach(drop,()=>{if(this.collect(drop,true))this.callbacks.refresh()})
-     else this.target=this.nearest(460)
+     else{this.target=this.nearest(460,true);this.failedChase=0}
     }
-    if(this.target){
+    if(this.target&&!this.actionEvent){
      const job=jobs[hero.job]
      if(this.target.hp<=0)this.target=undefined
-     else if(dist(hero,this.target)>job.range-7||!this.line(hero,this.target))this.moving=this.go(this.target,speed,dt,Math.min(48,jobs[hero.job].range-12))
-     else this.basic(this.target)
+     else if(dist(hero,this.target)>job.range-7||!this.line(hero,this.target)){
+      this.moving=this.go(this.target,speed,dt,Math.min(48,job.range-12))
+      this.failedChase=this.moving?0:this.failedChase+dt
+      if(this.auto&&this.failedChase>=1.1){
+       this.skippedTargets.set(this.target,this.clock+4)
+       this.target=undefined
+      }
+     }else{this.failedChase=0;this.basic(this.target)}
     }else if(this.destination){
      if(dist(hero,this.destination)<5)this.destination=undefined
      else this.moving=this.go(this.destination,speed,dt,this.interactionPoint?47:10)
     }
    }
+   if(this.moving&&this.clock>=this.nextStep){
+    footstep(safeZone(hero.zone)||hero.zone>=4&&hero.zone!==10)
+    this.nextStep=this.clock+(this.running?.25:.37)
+   }
    if(this.moving&&!hero.stats.move)record(hero,'move')
+   if(hero.zone===13||hero.zone===14)traps.forEach((trap,i)=>{
+    const {cycle,active}=trapState(this.clock,i)
+    if(!active||cycle===this.trapClaims[i]||dist(hero,trap)>28)return
+    this.trapClaims[i]=cycle
+    const guardian=this.mobs[0]
+    if(guardian){this.hurt(guardian,.65);this.burst(trap,0xffaf84,47)}
+   })
    for(const mob of this.mobs)this.think(mob,dt)
    if(this.pet&&!this.dead){
     const p=this.pet, target=this.target??this.nearest(95), goal=target??{x:hero.x-this.facing*27,y:hero.y+16}
@@ -703,6 +789,7 @@ export class World extends Phaser.Scene {
   camera.centerOn(Phaser.Math.Linear(cx,this.hero.x,1-Math.exp(-dt*10)),Phaser.Math.Linear(cy,this.hero.y-15,1-Math.exp(-dt*10)))
   this.prefetch()
   this.renderWorld()
+  this.renderWeather()
  }
  navigateQuest(){
   const point=this.questPoint
@@ -757,8 +844,33 @@ export class World extends Phaser.Scene {
  private resolveRift(){
   const zone=this.hero.zone
   this.hero.stats['riftDay'+zone]=1;record(this.hero,'rift')
-  this.loot.push({...riftPoint,gold:zone*93,material:'blink',gear:makeRelic(7,3,zones[zone][1],this.hero.job,zone-8)})
+  this.loot.push({...riftPoint,gold:zone*93,material:'blink',gear:makeRelic(7,3,zones[zone][1],this.hero.job,relicForZone(zone))})
   this.callbacks.message('裂隙已淨化，遺物落在祭壇附近','gold');this.burst(riftPoint,0xe9acf6,116);sound('loot')
+ }
+ get atmosphere(){return daylight(this.clock,this.hero.zone)}
+ private renderWeather(){
+  const ink=this.weatherInk, {sun,open,weather}=this.atmosphere
+  ink.clear()
+  if(!open)return
+  const camera=this.cameras.main, w=camera.width/camera.zoom,h=camera.height/camera.zoom
+  if(w<=0||h<=0)return
+  const x=camera.scrollX+(camera.width-w)/2,y=camera.scrollY+(camera.height-h)/2
+  ink.fillStyle(0x19324c,(1-sun)*.23).fillRect(x,y,w,h)
+  if(!this.hero.preferences.effects)return
+  const time=this.previewFrames
+  if(weather==='細雨'){
+   const count=this.hero.preferences.detail==='balanced'||this.display?.reduced?19:58
+   ink.lineStyle(1,0xb9d7e7,.30)
+   for(let i=0;i<count;i++){
+    const px=x+((i*137.3+time*93)%w),py=y+((i*79.1+time*(330+i%7*17))%h)
+    ink.lineBetween(px,py,px-7,py+15)
+   }
+  }else if(weather==='薄霧'){
+   for(let i=0;i<6;i++){
+    const px=x+(i+.2)*w/6+Math.sin(time*.6+i)*26,py=y+h*(.37+i%3*.19)
+    ink.fillStyle(0xbcccca,.046).fillEllipse(px,py,w*.47,28+i*4)
+   }
+  }
  }
  get movementSpeed(){return 187*(this.morph?morphs[this.morph.id][2]:1)*(this.pet?.id===0?1.09:1)}
  get attackRate(){return (this.morph?morphs[this.morph.id][3]:1)/attributes(this.hero).interval}
@@ -799,6 +911,12 @@ export class World extends Phaser.Scene {
   private renderWorld(){
   const g=this.graphics, hero=this.hero, zone=hero.zone, accent=zones[zone][4]
   g.clear()
+  if(zone===13||zone===14)traps.forEach((trap,i)=>{
+   const {warning,active}=trapState(this.clock,i)
+   g.fillStyle(0x151923,.8).fillEllipse(trap.x,trap.y,60,27)
+   g.lineStyle(1,active?0xff9570:warning?0xefc788:0x877b77,.9).strokeEllipse(trap.x,trap.y,57,24)
+   if(active)for(let j=-2;j<=2;j++)g.fillStyle(0xdbc8ba).fillTriangle(trap.x+j*9-4,trap.y+5,trap.x+j*9,trap.y-19,trap.x+j*9+4,trap.y+5)
+  })
   for(const p of [entry,exit]){
    const pulse=(Math.sin(this.previewFrames*3.3)+1)/2
    g.lineStyle(1,accent,.25+pulse*.35).strokeEllipse(p.x,p.y,48+pulse*22,13+pulse*8)
@@ -845,7 +963,14 @@ export class World extends Phaser.Scene {
   if(safeZone(zone))npcPoints.forEach((p,i)=>actors.push({y:p.y,render:()=>{
    if(!visible(p))return
    if(hero.preferences.shadows)g.fillStyle(0x130f16,.38).fillEllipse(p.x,p.y+1,37,13)
-   this.portraits.draw('npc'+i,townArt(i),p.x,p.y,i===4?83:74,'idle',this.previewFrames+i*.4,1)
+   const interacted=this.npcActivity.get(i)
+   const local=interacted!==undefined&&this.previewFrames-interacted<1.8?this.previewFrames-interacted:(this.previewFrames+i*.73)%10
+   const work=local<2.4?Math.floor(local/.48)%2:undefined
+   this.portraits.draw('npc'+i,townArt(i),p.x,p.y,i===4?83:74,'idle',this.previewFrames+i*.4,1,undefined,work===undefined?undefined:{atlas:i<5?'village-a':'village-b',frame:'work-'+i+'-'+work})
+   if(i===4&&work===1&&hero.preferences.effects){
+    const t=(local% .48)/.48
+    for(let spark=0;spark<5;spark++)g.fillStyle(0xffbd71,(1-t)*.82).fillCircle(p.x+13+Math.cos(spark*1.5)*t*17,p.y-19-t*(8+spark*2),1.4)
+   }
    if(i===7)g.fillStyle(0xffc778).fillRect(p.x-1,p.y-66,3,7).fillRect(p.x-1,p.y-57,3,2)
   }}))
   for(const mob of this.mobs){
@@ -854,11 +979,16 @@ export class World extends Phaser.Scene {
     const d=mob.definition
     if(d.rank==='精英'&&mob.hp>0)g.lineStyle(1,0xe6af77,.8).strokeEllipse(mob.x,mob.y,39,15)
     if(this.target===mob)g.lineStyle(2,0xf0a572,.9).strokeEllipse(mob.x,mob.y+2,d.boss?62:36,13)
-    const pose:Pose=mob.hp<=0?'dead':mob.hurt>this.clock?'hurt':mob.tell?'cast':mob.hitAt-this.clock>.93&&mob.angry?'attack':mob.angry?'walk':'idle'
+    const pose:Pose=mob.hp<=0?'dead':mob.hurt>this.clock?'hurt':mob.tell?'cast':mob.windup!==undefined?'attack':mob.angry?'walk':'idle'
     const facing=this.direction(hero.x-mob.x,hero.y-mob.y)
     const art=creatureArt(d.name,d.zone,d.boss), height=d.boss?122:art==='slime'?46:art==='spider'?61:74
+    if(mob.windup!==undefined){
+     g.lineStyle(2,0xffc784,.75).strokeEllipse(mob.x,mob.y+1,33,13)
+     g.fillStyle(0xffbc71,.7).fillTriangle(mob.x-4,mob.y-height-14,mob.x+4,mob.y-height-14,mob.x,mob.y-height-7)
+    }
     if(hero.preferences.shadows)g.fillStyle(0x100d16,.48).fillEllipse(mob.x,mob.y+1,height*.61,height*.23)
-    this.portraits.draw(mob,art,mob.x,mob.y,height,pose,this.previewFrames+d.id*.4,facing)
+    const impact=(mob.impact??0)>this.clock
+    this.portraits.draw(mob,art,mob.x,mob.y,height,impact&&pose==='walk'?'attack':pose,this.previewFrames+d.id*.4,facing,undefined,undefined,impact)
     if(mob.hp>0&&(this.target===mob||mob.angry)){
      const width=d.boss?78:39,y=mob.y-height-7
      g.fillStyle(0x211824).fillRect(mob.x-width/2,y,width,4)
@@ -888,10 +1018,10 @@ export class World extends Phaser.Scene {
    const pose:Pose=this.dead?'dead':this.poseUntil>this.clock?this.pose:this.moving?(this.running?'run':'walk'):'idle'
    const name=mix?['guard','guard','wolf','wraith','guard','dragon'][this.morph!.id]:heroArt(hero.job)
    if(hero.preferences.shadows)g.fillStyle(0x120e16,.49).fillEllipse(hero.x,hero.y+1,43,13)
-   this.portraits.draw('hero',name,hero.x,hero.y,91,pose,this.previewFrames,this.heading)
+   this.portraits.draw('hero',name,hero.x,hero.y,91,pose,this.previewFrames,this.heading,this.dead?undefined:this.clock-this.poseStarted)
    const kit=hero.job===0&&!mix?this.portraits.equipment(hero.worn,pose,this.heading).join(','):''
    if(this.viewportNode.dataset.kit!==kit)this.viewportNode.dataset.kit=kit
-   if(hero.job!==0&&hero.worn[1]&&!mix)this.portraits.armor(hero.x,hero.y,this.facing,pose,this.heading)
+   if(hero.job!==0&&hero.worn[1]&&!mix)this.portraits.armor(pose,this.heading)
    if(this.viewportNode.dataset.pose!==this.portraits.heroFrame)this.viewportNode.dataset.pose=this.portraits.heroFrame
    if(this.viewportNode.dataset.facing!==String(this.heading))this.viewportNode.dataset.facing=String(this.heading)
    const weapon=hero.worn[0], armor=hero.worn[3]

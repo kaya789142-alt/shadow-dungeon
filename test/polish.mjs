@@ -70,7 +70,7 @@ try{
   await close()
   await button('開啟區域地圖').tap()
   if(side==='after'){
-   assert.equal(await page.locator('.realm-marker').count(),13)
+   assert.equal(await page.locator('.realm-marker').count(),16)
    assert.match(await action('map-zone:1').getAttribute('aria-label'),/任務目標/)
    await action('map-zone:1').tap()
    assert.equal(await action('map-zone:1').getAttribute('aria-pressed'),'true')

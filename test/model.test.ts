@@ -6,8 +6,8 @@ import { attributes, createHero, decodeSave, giveXp, makeGear, makeRelic, qualit
 test('five classes, legacy IDs and the new expedition zones remain consistent',()=>{
  assert.equal(jobs.length,5)
  assert.ok(jobs.every(job=>job.skills.length===5))
- assert.equal(zones.length,13)
- assert.equal(allMonsters.length,51)
+ assert.equal(zones.length,16)
+ assert.equal(allMonsters.length,63)
  assert.deepEqual(allMonsters.slice(0,35),monsters)
  assert.equal(allMonsters[50].rank,'世界魔王')
  assert.deepEqual(zoneRoutes(11),[10,12])
@@ -127,7 +127,7 @@ test('V2.1 graphics presets respect DPR, backing-pixel budget and adaptive fallb
  assert.equal(current.bag[0].uid,old.bag[0].uid)
 })
 
-test('walkable boundaries preserve local coordinates and connect all thirteen regions',async()=>{
+test('walkable boundaries preserve local coordinates and connect all sixteen regions',async()=>{
  const {crossing,landNeighbor,nextDirection}=await import('../src/overworld.ts')
  assert.deepEqual(crossing(0,1,1504.5,535),{zone:1,x:4.5,y:535,shift:1500})
  assert.deepEqual(crossing(1,1,-3.5,552),{zone:0,x:1496.5,y:552,shift:-1500})
@@ -203,4 +203,33 @@ test('V3.2 quote settles exactly once and protects worn, locked and quest items'
  assert.equal(sellQuotedGear(loaded,ids,quote.total,true),false)
  assert.equal(loaded.gold,182+quote.total)
  assert.deepEqual(loaded.bag.map(g=>g.uid),[locked.uid])
+})
+
+test('epic lighting, shield blocks and set thresholds remain deterministic',async()=>{
+ const {daylight,guardedDamage,setBonus,trapState}=await import('../src/epic.ts')
+ assert.equal(daylight(0,0).light,'白晝')
+ assert.equal(daylight(50,1).weather,'細雨')
+ assert.equal(daylight(100,1).weather,'薄霧')
+ assert.equal(daylight(50,6).weather,'室內')
+ assert.equal(trapState(2.5,0).warning,true)
+ assert.equal(trapState(3.1,0).active,true)
+ assert.equal(trapState(3.8,0).active,false)
+ const hero=createHero('龍鑄遠征',0)
+ hero.bag.push(makeRelic(1,4,45,0,7))
+ assert.equal(decodeSave(JSON.stringify(hero)).bag.at(-1)?.relic,7)
+ assert.equal(guardedDamage(40,undefined,0).damage,40)
+ assert.deepEqual(guardedDamage(40,makeGear(1,3,8),.1),{blocked:true,damage:22})
+ const worn=Object.fromEntries([1,2,3,4,5].map(slot=>[slot,makeGear(slot,2,12)]))
+ assert.deepEqual(setBonus(worn),{pieces:5,defense:4,damage:5})
+ assert.equal(setBonus({...worn,1:makeGear(1,1,5)}).damage,0)
+})
+
+test('animation contact drives projectile and melee timelines',async()=>{
+ const {attackFrame,meleeContact,attackDuration,flightToContact}=await import('../src/animation.ts')
+ assert.equal(attackFrame(0),'ready')
+ assert.equal(attackFrame(meleeContact-.001),'draw')
+ assert.equal(attackFrame(meleeContact),'contact')
+ assert.equal(attackFrame(.225),'recover')
+ assert.ok(attackDuration(false)>.22)
+ assert.ok(attackDuration(true)>meleeContact+flightToContact)
 })

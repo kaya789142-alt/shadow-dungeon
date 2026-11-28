@@ -1,7 +1,8 @@
+import { setBonus } from './epic'
 import Phaser from 'phaser'
 import '@fontsource-variable/noto-sans-tc'
 import { achievementTitles, attributes, createHero, decodeSave, expNeeded, gearPower, load, makeGear, makeRelic, materials, record, rollover, save, spawn, upgrade, upgradeInfo } from './model'
-import { achievements, allMonsters, elements, gearName, jobs, materialNames, morphs, pets, quality, qualityColors, quests, rules, safeZone, slots, vendors, zoneRoutes, zones } from './data'
+import { achievements, allMonsters, elements, gearName, jobs, materialNames, morphs, pets, quality, qualityColors, quests, relicForZone, rules, safeZone, slots, vendors, zoneRoutes, zones } from './data'
 import type { Gear, Material, Quest, Skill } from './data'
 import { entry, exit, HEIGHT, WIDTH } from './art'
 import { icon } from './icons'
@@ -166,7 +167,8 @@ function paint(){
   portrait.innerHTML=`<img alt="" src="${playerArt(hero.job)}">`
   portrait.style.color='#'+job.color.toString(16)
  }
- setText('top-zone',region[0]);setText('map-name',region[0]);setText('gold',hero.gold.toLocaleString('zh-TW'))
+ const {light,weather}=world.atmosphere
+ setText('top-zone',region[0]+' · '+light+'／'+weather);setText('map-name',region[0]);setText('gold',hero.gold.toLocaleString('zh-TW'))
  const ratio=hero.level>=rules.maxLevel?100:Math.floor(100*hero.xp/expNeeded(hero.level))
  select('#xp-fill').style.width=ratio+'%';setText('xp-numbers',ratio+'%');setText('hud-xp','經驗 '+ratio+'%')
  setText('red-count',String(hero.items.red));setText('blue-count',String(hero.items.blue))
@@ -508,11 +510,12 @@ function paperDoll(){
    ${gear?gearIcon(index):'<span class="doll-empty" aria-hidden="true">＋</span>'}
    <span>${name}${gear?.plus?' +'+gear.plus:''}</span></button>`
  }
- const gear=hero.worn[selectedSlot], job=jobs[hero.job], stats=attributes(hero)
+ const gear=hero.worn[selectedSlot], job=jobs[hero.job], stats=attributes(hero), set=setBonus(hero.worn)
  return `<div class="doll-stats">戰力指標 ${combatScore(stats)} · 物攻 ${Math.round(stats.attack)} · 魔攻 ${Math.round(stats.magic)} · 防禦 ${Math.round(stats.defense)}</div>
   <div class="doll"><div class="doll-slots">${[2,3,4,9,5].map(slotCard).join('')}</div>
   <div class="doll-portrait"><div class="doll-figure ${hero.job===0?'sample-doll':''}">${hero.job===0?photographedDoll(hero.worn,true):''}<img src="${playerArt(hero.job)}" alt="">${hero.job===0?photographedDoll(hero.worn,false):equipmentLayers(hero.job,hero.worn)}</div><span>${escape(hero.name)} · ${job.name}</span></div>
   <div class="doll-slots">${[0,1,6,7,8].map(slotCard).join('')}</div></div>`+
+  (set.pieces>=3?group('套裝效果',empty(set.pieces+' 件 · 防禦 +'+set.defense+(set.damage?' · 物攻及魔攻 +'+set.damage:''))):'')+
   group('角色屬性',`<div class="doll-vitals"><span>生命 ${Math.ceil(hero.hp)} / ${Math.ceil(stats.hp)}</span><span>魔力 ${Math.ceil(hero.mp)} / ${Math.ceil(stats.mp)}</span>
    <span>攻速 ${world.attackRate.toFixed(2)} 次／秒</span><span>移速 ${Math.round(world.movementSpeed)} 單位／秒</span>
    <span>爆擊 ${Math.round(stats.crit*100)}%</span><span>護盾減傷 ${Math.round(world.shieldReduction*100)}%</span></div>`)+
@@ -796,7 +799,7 @@ function perform(key:string,element:HTMLElement){
    world.reward(28+quest.count*7+(quest.zone??0)*36)
    if(quest.zone&&quest.event==='boss'){
     const slot=(quest.zone+2)%9, tier=zones[quest.zone][1]
-    hero.bag.push(quest.zone>=9?makeRelic((quest.zone+2)%8+1,3,tier,hero.job,quest.zone-8):
+    hero.bag.push(quest.zone>=9?makeRelic((quest.zone+2)%8+1,3,tier,hero.job,relicForZone(quest.zone)):
      makeGear(slot,3,tier,slot===0?hero.job:undefined))
    }
    if(hero.tracking===id)hero.tracking=quests.find(q=>!hero.claims[q.id]&&hero.quests[q.id]!==undefined)?.id??''
